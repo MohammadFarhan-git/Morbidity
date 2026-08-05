@@ -1,0 +1,33 @@
+# Virtual Environments
+.venv/
+venv/
+ENV/
+env/
+.morbenv/
+
+# Python Cache & Compiled Files
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Large Data & Excel Files (Keep repository lightweight!)
+*.xlsb
+*.xlsx
+*.csv
+*.parquet
+*.h5
+*.zip
+data/*
+*.md
+*.pdf
+
+# Temporary & OS Files
+.DS_Store
+Thumbs.db
+~$*.xlsx
+~$*.xlsb
+
+# Environment Variables & Secrets
+.env
+secrets.toml
