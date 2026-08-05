@@ -9,7 +9,8 @@ python-dateutil
 pytz
 regex
 six
-streamlit
+streamlit==1.40.0
+starlette==0.38.6
 tqdm
 tzdata
 zope.interface
