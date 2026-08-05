@@ -1,7 +1,22 @@
 import io
 import os
 import re
+import inspect
 from datetime import datetime
+
+# ==============================================================================
+# Compatibility Patch for Starlette GZipResponder on Streamlit Cloud / ASGI
+# ==============================================================================
+try:
+    import starlette.middleware.gzip as gz
+    _orig_gzip_init = gz.GZipResponder.__init__
+    _sig = inspect.signature(_orig_gzip_init)
+    if 'thread_minimum_size' in _sig.parameters:
+        def _patched_gzip_init(self, app, minimum_size=1024, compresslevel=9, *, thread_minimum_size=1024, **kwargs):
+            return _orig_gzip_init(self, app, minimum_size=minimum_size, compresslevel=compresslevel, thread_minimum_size=thread_minimum_size, **kwargs)
+        gz.GZipResponder.__init__ = _patched_gzip_init
+except Exception:
+    pass
 
 import numpy as np
 import openpyxl
