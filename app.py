@@ -75,10 +75,19 @@ CAMPUS_SHEETS = [
 ]
 
 FOLLOW_UP_PERIODS = {
-    "1D": (0, 3),
-    "1W": (4, 10),
-    "1M": (11, 45),
-    "3M": (46, 135)
+    "1D": (pd.Timedelta(days=0), pd.Timedelta(days=3)),
+    "1W": (pd.Timedelta(days=4), pd.Timedelta(days=10)),
+    "1M": (pd.Timedelta(days=11), pd.Timedelta(days=45)),
+    "3M": (pd.Timedelta(days=46), pd.Timedelta(days=135)),
+    "6M": (pd.Timedelta(days=136), pd.Timedelta(days=225)),
+    "9M": (pd.Timedelta(days=226), pd.Timedelta(days=317)),
+    "1Y": (pd.Timedelta(days=318), pd.Timedelta(days=456)),
+    "18M": (pd.Timedelta(days=457), pd.Timedelta(days=639)),
+    "2Y": (pd.Timedelta(days=640), pd.Timedelta(days=822)),
+    "30M": (pd.Timedelta(days=823), pd.Timedelta(days=1004)),
+    "3Y": (pd.Timedelta(days=1005), pd.Timedelta(days=1278)),
+    "4Y": (pd.Timedelta(days=1279), pd.Timedelta(days=1643)),
+    "5Y": (pd.Timedelta(days=1644), pd.Timedelta(days=2008)),
 }
 
 VA_SPECIAL_MAP = {
@@ -294,13 +303,14 @@ def categorize_repeat_surgery(x):
 def line_category(diff):
     if pd.isna(diff):
         return np.nan
-    lines = int(abs(diff) // 0.1)
-    if lines == 0:
+    diff_round = round(diff, 3)
+    if abs(diff_round) < 0.1:
         return "No Change (<1 Line)"
-    elif lines <= 5:
-        return f"{lines} Line{'s' if lines > 1 else ''}"
+    lines = int(abs(diff_round) // 0.1)
+    if diff_round > 0:
+        return f"+{lines} Line" if lines == 1 else (f"+{lines} Lines" if lines <= 5 else ">+5 Lines")
     else:
-        return ">5 Lines"
+        return f"-{lines} Line" if lines == 1 else (f"-{lines} Lines" if lines <= 5 else "<-5 Lines")
 
 def average_visits(df: pd.DataFrame, group_cols: list[str]) -> pd.DataFrame:
     return (
@@ -410,6 +420,8 @@ def beautify_workbook(wb: openpyxl.Workbook) -> openpyxl.Workbook:
                     cell.alignment = openpyxl.styles.Alignment(horizontal="right", vertical="center")
                     if isinstance(val, (int, float)):
                         cell.number_format = '0.000'
+                elif "snellen" in header_lower:
+                    cell.alignment = openpyxl.styles.Alignment(horizontal="center", vertical="center")
                 elif any(k in header_lower for k in ["avg", "sd", "median"]):
                     cell.alignment = openpyxl.styles.Alignment(horizontal="right", vertical="center")
                     if isinstance(val, (int, float)):
@@ -531,6 +543,19 @@ def run_analysis_pipeline(df_raw: pd.DataFrame):
     else:
         df["best_va_logmar"] = np.nan
 
+    # Best Snellen determination (BCVA > Pin Hole > UCVA)
+    conditions = [
+        df["bcva_logmar"].notna() & (df["bcva_logmar"] == df["best_va_logmar"]) if "bcva_logmar" in df.columns else pd.Series(False, index=df.index),
+        df["pin_hole_logmar"].notna() & (df["pin_hole_logmar"] == df["best_va_logmar"]) if "pin_hole_logmar" in df.columns else pd.Series(False, index=df.index),
+        df["ucva_logmar"].notna() & (df["ucva_logmar"] == df["best_va_logmar"]) if "ucva_logmar" in df.columns else pd.Series(False, index=df.index),
+    ]
+    choices = [
+        df["bcva"] if "bcva" in df.columns else pd.Series(np.nan, index=df.index),
+        df["pin_hole"] if "pin_hole" in df.columns else pd.Series(np.nan, index=df.index),
+        df["ucva"] if "ucva" in df.columns else pd.Series(np.nan, index=df.index),
+    ]
+    df["best_va_snellen"] = np.select(conditions, choices, default=np.nan)
+
     # 6. Derived Columns
     if "visit_date" in df.columns and "dob" in df.columns:
         df['age'] = df["visit_date"].dt.year - df["dob"].dt.year
@@ -553,7 +578,7 @@ def run_analysis_pipeline(df_raw: pd.DataFrame):
     VISIT_COLS = [
         'id', 'sap_code', 'tp_mrno_corrected', 'tp_mrno', 'dob', 'age', 'gender',
         'sub_category', 'surg_date', 'surg_eye', 'visit_date', 'days_after_surgery',
-        'surg_age', 'best_va_logmar', 'surgeon_name', 'advise_surg',
+        'surg_age', 'best_va_logmar', 'best_va_snellen', 'surgeon_name', 'advise_surg',
         'surg_proc_group', 'graft_health_text', 'fup_surg_done', 'fup_surg_date',
         'fup_surg_doctor', 'fup_done_surg_proc',
     ]
@@ -607,7 +632,9 @@ def run_analysis_pipeline(df_raw: pd.DataFrame):
         'campus_surgery':  ['sap_code', 'surg_proc_group'],
     }
     for period, (start_day, end_day) in FOLLOW_UP_PERIODS.items():
-        window_df = visit_df_primary[visit_df_primary['days_after_surgery'].between(start_day, end_day)].copy()
+        s_day = start_day.days if isinstance(start_day, pd.Timedelta) else start_day
+        e_day = end_day.days if isinstance(end_day, pd.Timedelta) else end_day
+        window_df = visit_df_primary[visit_df_primary['days_after_surgery'].between(s_day, e_day)].copy()
         if 'graft_health_text' in window_df.columns:
             window_graft = window_df.dropna(subset=['graft_health_text']).sort_values(['id', 'visit_date']).groupby('id', as_index=False).last()
         else:
@@ -643,9 +670,11 @@ def run_analysis_pipeline(df_raw: pd.DataFrame):
         }
         visits = grp["days_after_surgery"].dropna()
         for period, (start, end) in FOLLOW_UP_PERIODS.items():
-            visit_count = visits.between(start, end).sum()
+            s_day = start.days if isinstance(start, pd.Timedelta) else start
+            e_day = end.days if isinstance(end, pd.Timedelta) else end
+            visit_count = visits.between(s_day, e_day).sum()
             row[f"{period}_Visits"] = int(visit_count)
-            window_end = surg_date + pd.Timedelta(days=end) if pd.notna(surg_date) else pd.NaT
+            window_end = surg_date + (end if isinstance(end, pd.Timedelta) else pd.Timedelta(days=end)) if pd.notna(surg_date) else pd.NaT
             if visit_count > 0:
                 status = "YES"
             elif pd.notna(window_end) and today <= window_end:
@@ -740,67 +769,121 @@ def run_analysis_pipeline(df_raw: pd.DataFrame):
     # ── Analysis 6: Visual Acuity (VA) Change ──
     VA_df = visit_df_primary[visit_df_primary['surg_proc_group'] != 'THPK'].copy()
 
-    def _latest_va(source_df, condition):
+    # Dynamic trimming of follow-up periods based on available data
+    period_counts = {}
+    for period, (start, end) in FOLLOW_UP_PERIODS.items():
+        s_day = start.days if isinstance(start, pd.Timedelta) else start
+        e_day = end.days if isinstance(end, pd.Timedelta) else end
+        cnt = (
+            VA_df["days_after_surgery"].between(s_day, e_day) &
+            VA_df["best_va_logmar"].notna()
+        ).sum()
+        period_counts[period] = cnt
+
+    periods_with_data = [p for p, c in period_counts.items() if c > 0]
+    if periods_with_data:
+        all_keys = list(FOLLOW_UP_PERIODS.keys())
+        last_idx = all_keys.index(periods_with_data[-1])
+        active_periods = {p: FOLLOW_UP_PERIODS[p] for p in all_keys[:last_idx + 1]}
+    else:
+        active_periods = {p: FOLLOW_UP_PERIODS[p] for p in list(FOLLOW_UP_PERIODS.keys())[:4]}
+
+    def _latest_va(source_df, condition, prefix):
         if "best_va_logmar" not in source_df.columns:
-            return pd.DataFrame(columns=["id", "preop_visit_date", "preop_logmar"])
-        return (
+            return pd.DataFrame(columns=["id", f"{prefix}_visit_date", f"{prefix}_logmar", f"{prefix}_snellen"])
+        cols = ["id", "visit_date", "best_va_logmar"]
+        if "best_va_snellen" in source_df.columns:
+            cols.append("best_va_snellen")
+        res = (
             source_df[condition & source_df["best_va_logmar"].notna()]
             .sort_values(["id", "visit_date"])
             .groupby("id").tail(1)
-            [["id", "visit_date", "best_va_logmar"]]
-            .rename(columns={"visit_date": "preop_visit_date", "best_va_logmar": "preop_logmar"})
+            [cols]
+            .rename(columns={
+                "visit_date": f"{prefix}_visit_date",
+                "best_va_logmar": f"{prefix}_logmar",
+                "best_va_snellen": f"{prefix}_snellen"
+            })
         )
+        if f"{prefix}_snellen" not in res.columns:
+            res[f"{prefix}_snellen"] = np.nan
+        return res
 
-    preop_before   = _latest_va(VA_df, VA_df["visit_date"] < VA_df["surg_date"])
-    preop_same_day = _latest_va(VA_df, VA_df["visit_date"] == VA_df["surg_date"])
+    preop_before   = _latest_va(VA_df, VA_df["visit_date"] < VA_df["surg_date"], "preop")
+    preop_same_day = _latest_va(VA_df, VA_df["visit_date"] == VA_df["surg_date"], "preop")
     preop = preop_before.combine_first(preop_same_day.set_index("id")).reset_index()
 
     base = VA_df.groupby("id").first().reset_index()
     keep = [c for c in ["id", "sap_code", "tp_mrno_corrected", "tp_mrno", "gender", "sub_category", "surg_date", "surg_eye", "surg_proc_group", "surgeon_name"] if c in base.columns]
     VA_summary = base[keep].merge(preop, on="id", how="left")
 
-    for period, (start, end) in FOLLOW_UP_PERIODS.items():
+    for period, (start, end) in active_periods.items():
         p = period.lower()
+        s_day = start.days if isinstance(start, pd.Timedelta) else start
+        e_day = end.days if isinstance(end, pd.Timedelta) else end
         if "best_va_logmar" in VA_df.columns:
-            temp = (
-                VA_df[
-                    VA_df["days_after_surgery"].between(start, end) &
-                    VA_df["best_va_logmar"].notna()
-                ]
-                .sort_values(["id", "visit_date"])
-                .groupby("id").tail(1)
-                [["id", "visit_date", "best_va_logmar"]]
-                .rename(columns={"visit_date": f"{p}_visit_date", "best_va_logmar": f"{p}_logmar"})
-            )
+            temp = _latest_va(VA_df, VA_df["days_after_surgery"].between(s_day, e_day), p)
             VA_summary = VA_summary.merge(temp, on="id", how="left")
             VA_summary[f"{p}_diff"] = VA_summary["preop_logmar"] - VA_summary[f"{p}_logmar"]
         else:
+            VA_summary[f"{p}_visit_date"] = pd.NaT
             VA_summary[f"{p}_logmar"] = np.nan
+            VA_summary[f"{p}_snellen"] = np.nan
             VA_summary[f"{p}_diff"] = np.nan
 
-    for period in FOLLOW_UP_PERIODS:
+    for period in active_periods:
         p = period.lower()
         VA_summary[f"{p}_line_cat"] = VA_summary[f"{p}_diff"].apply(line_category)
 
-    diff_cols = [f"{p.lower()}_diff" for p in FOLLOW_UP_PERIODS]
+    # Reorder columns in VA_summary
+    ordered_cols = [c for c in keep if c in VA_summary.columns]
+    for pre_c in ["preop_visit_date", "preop_logmar", "preop_snellen"]:
+        if pre_c in VA_summary.columns:
+            ordered_cols.append(pre_c)
+
+    for period in active_periods:
+        p = period.lower()
+        for col_suffix in ["visit_date", "logmar", "snellen", "diff"]:
+            cname = f"{p}_{col_suffix}"
+            if cname in VA_summary.columns:
+                ordered_cols.append(cname)
+
+    for period in active_periods:
+        p = period.lower()
+        cname = f"{p}_line_cat"
+        if cname in VA_summary.columns:
+            ordered_cols.append(cname)
+
+    VA_summary = VA_summary[[c for c in ordered_cols if c in VA_summary.columns]]
+
+    diff_cols = [f"{p.lower()}_diff" for p in active_periods]
     avg_change_proc = VA_summary.groupby("surg_proc_group")[diff_cols].mean().round(3).reset_index()
     avg_change_campus_surg = VA_summary.groupby(["sap_code", "surg_proc_group"])[diff_cols].mean().round(3).reset_index()
 
+    LINE_CAT_ORDER = [
+        "<-5 Lines", "-5 Lines", "-4 Lines", "-3 Lines", "-2 Lines", "-1 Line",
+        "No Change (<1 Line)",
+        "+1 Line", "+2 Lines", "+3 Lines", "+4 Lines", "+5 Lines", ">+5 Lines"
+    ]
+
     line_summaries = {}
-    for period in FOLLOW_UP_PERIODS:
+    for period in active_periods:
         p = period.lower()
-        line_summaries[period] = (
+        ctab = (
             VA_summary
             .groupby(["surg_proc_group", f"{p}_line_cat"]).size()
-            .unstack(fill_value=0).reset_index()
+            .unstack(fill_value=0)
         )
+        ordered_cats = [c for c in LINE_CAT_ORDER if c in ctab.columns]
+        extra_cats = [c for c in ctab.columns if c not in LINE_CAT_ORDER]
+        ctab = ctab[ordered_cats + extra_cats].reset_index()
+        line_summaries[period] = ctab
 
     EXCEL_SHEETS["6_VA Patient Detail"]    = VA_summary
     EXCEL_SHEETS["6_VA Avg by Proc"]       = avg_change_proc
     EXCEL_SHEETS["6_VA Avg Camp×Surg"]     = avg_change_campus_surg
-    EXCEL_SHEETS["6_VA Lines 1D"]          = line_summaries["1D"]
-    EXCEL_SHEETS["6_VA Lines 1W"]          = line_summaries["1W"]
-    EXCEL_SHEETS["6_VA Lines 1M"]          = line_summaries["1M"]
+    for period in active_periods:
+        EXCEL_SHEETS[f"6_VA Lines {period}"] = line_summaries[period]
 
     # 8. Create Formatted Excel Buffer
     output_buffer = io.BytesIO()
@@ -953,5 +1036,7 @@ else:
         st.subheader("6 · Visual Acuity (LogMAR) Changes (non-THPK)")
         st.markdown("#### Average LogMAR Improvement by Procedure")
         st.dataframe(excel_sheets["6_VA Avg by Proc"], use_container_width=True)
-        st.markdown("#### Line Change Distribution at 1 Month (1M)")
-        st.dataframe(excel_sheets["6_VA Lines 1M"], use_container_width=True)
+        st.markdown("#### Line Change Distribution")
+        available_lines = [s for s in excel_sheets if s.startswith("6_VA Lines")]
+        if available_lines:
+            st.dataframe(excel_sheets[available_lines[0]], use_container_width=True)
