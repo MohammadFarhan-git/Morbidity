@@ -22,6 +22,15 @@ import numpy as np
 import openpyxl
 import pandas as pd
 import streamlit as st
+from src.trend_analysis import (
+    load_and_clean_month_df,
+    process_single_month,
+    build_3month_trend_tables,
+    create_trend_excel,
+    create_trend_pdf,
+    extract_month_label,
+)
+
 
 # ==============================================================================
 # Page Configuration & Styling
@@ -908,135 +917,289 @@ def run_analysis_pipeline(df_raw: pd.DataFrame):
 # ==============================================================================
 # Main UI Layout
 # ==============================================================================
-st.markdown("<div class='main-header'>👁️ Corneal Transplant Surgery Morbidity Analyzer</div>", unsafe_allow_html=True)
-st.markdown("<div class='sub-header'>Upload your raw surgery & follow-up data (.xlsb, .xlsx, .xlsm, .csv) to generate executive analysis reports.</div>", unsafe_allow_html=True)
-
 with st.sidebar:
     st.image("https://img.icons8.com/color/96/000000/ophthalmology.png", width=70)
-    st.header("Upload Data File")
-    uploaded_file = st.file_uploader(
-        "Choose an Excel (.xlsb, .xlsx, .xlsm, .xls) or CSV file",
-        type=["xlsb", "xlsx", "xlsm", "xls", "csv"],
-        help="Upload the raw data file containing campus surgery & follow-up records."
+    app_mode = st.radio(
+        "Analysis Mode",
+        ["Single-Month Deep Analysis", "3-Month Trend Analysis"],
+        help="Select Single-Month for full 6-analysis pipeline or 3-Month Trend Analysis to compare 3 consecutive monthly cohorts."
     )
-    
     st.markdown("---")
-    st.markdown("### Analysis Pipeline Includes:")
-    st.markdown("- 📊 **Surgery Counts & Demographics**")
-    st.markdown("- 👁️ **Graft Health Trends (1D, 1W, 1M, 3M)**")
-    st.markdown("- 📅 **Follow-Up Adherence & Visits**")
-    st.markdown("- ⚠️ **Failed & Infection Case Register**")
-    st.markdown("- 🔄 **Repeat Surgery Breakdown & KP Detail**")
-    st.markdown("- 📈 **Visual Acuity (LogMAR) Line Changes**")
 
-if uploaded_file is None:
-    st.info("👆 Please upload a data file using the sidebar to begin analysis.")
-    st.markdown("""
-    ### Expected Data Structure
-    The uploaded file can be:
-    1. An **Excel Workbook** with campus sheets (`KAR Campus Data`, `KVC Campus Data`, etc.) or individual sheets.
-    2. A **CSV File** with standardized column headers (`sap_code`, `tp_mrno`, `surg_date`, `graft_health_text`, `surg_proc_group`, etc.).
-    
-    *Header row auto-detection will locate column headers automatically even if title rows exist at the top.*
-    """)
+if app_mode == "Single-Month Deep Analysis":
+    st.markdown("<div class='main-header'>👁️ Corneal Transplant Surgery Morbidity Analyzer</div>", unsafe_allow_html=True)
+    st.markdown("<div class='sub-header'>Upload your raw surgery & follow-up data (.xlsb, .xlsx, .xlsm, .csv) to generate executive analysis reports.</div>", unsafe_allow_html=True)
+
+    with st.sidebar:
+        st.header("Upload Data File")
+        uploaded_file = st.file_uploader(
+            "Choose an Excel (.xlsb, .xlsx, .xlsm, .xls) or CSV file",
+            type=["xlsb", "xlsx", "xlsm", "xls", "csv"],
+            help="Upload the raw data file containing campus surgery & follow-up records."
+        )
+
+        st.markdown("---")
+        st.markdown("### Analysis Pipeline Includes:")
+        st.markdown("- 📊 **Surgery Counts & Demographics**")
+        st.markdown("- 👁️ **Graft Health Trends (1D, 1W, 1M, 3M)**")
+        st.markdown("- 📅 **Follow-Up Adherence & Visits**")
+        st.markdown("- ⚠️ **Failed & Infection Case Register**")
+        st.markdown("- 🔄 **Repeat Surgery Breakdown & KP Detail**")
+        st.markdown("- 📈 **Visual Acuity (LogMAR) Line Changes**")
+
+    if uploaded_file is None:
+        st.info("👆 Please upload a data file using the sidebar to begin analysis.")
+        st.markdown("""
+        ### Expected Data Structure
+        The uploaded file can be:
+        1. An **Excel Workbook** with campus sheets (`KAR Campus Data`, `KVC Campus Data`, etc.) or individual sheets.
+        2. A **CSV File** with standardized column headers (`sap_code`, `tp_mrno`, `surg_date`, `graft_health_text`, `surg_proc_group`, etc.).
+
+        *Header row auto-detection will locate column headers automatically even if title rows exist at the top.*
+        """)
+    else:
+        with st.spinner("Reading uploaded file and running analysis pipeline..."):
+            try:
+                df_raw = read_uploaded_file(uploaded_file)
+                excel_bytes, excel_sheets, stats = run_analysis_pipeline(df_raw)
+                st.success(f"✓ Analysis complete! Processed **{stats['total_surgeries']:,}** surgeries across **{stats['sheets_count']}** result tabs.")
+            except Exception as e:
+                st.error(f"❌ Error processing file: {e}")
+                st.stop()
+
+        # Metrics Display
+        st.markdown("### Key Statistics Overview")
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Primary Surgeries", f"{stats['total_surgeries']:,}")
+        c2.metric("Unique Patients", f"{stats['unique_patients']:,}")
+        c3.metric("Failed Graft Cases", f"{stats['failed_cases']:,}")
+        c4.metric("Infection Cases", f"{stats['infection_cases']:,}")
+        c5.metric("Repeat Surgeries", f"{stats['repeat_surgeries']:,}")
+
+        st.markdown("---")
+
+        # Download Section
+        st.markdown("### 📥 Download Resultant Analysis Workbook")
+        out_filename = f"Morbidity_Analysis_Results_{datetime.now().strftime('%b%Y')}.xlsx"
+        st.download_button(
+            label=f"⬇️ Download Executive Report ({out_filename})",
+            data=excel_bytes,
+            file_name=out_filename,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            help="Download the complete executive report formatted with colors, filters, and double bottom borders."
+        )
+
+        st.markdown("---")
+
+        # Preview Tabs
+        st.markdown("### 📊 Interactive Data Previews")
+        preview_tabs = st.tabs([
+            "1. Surgery Counts",
+            "2. Graft Health",
+            "3. Adherence",
+            "4. Failed & Infection",
+            "5. Repeat Surgeries",
+            "6. Visual Acuity Change"
+        ])
+
+        with preview_tabs[0]:
+            st.subheader("1 · Surgery Counts & Demographics")
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.markdown("#### By Surgery Type")
+                st.dataframe(excel_sheets["1_By SurgType"], use_container_width=True)
+                st.markdown("#### By Campus")
+                st.dataframe(excel_sheets["1_By Campus"], use_container_width=True)
+            with col_b:
+                st.markdown("#### By Gender")
+                st.dataframe(excel_sheets["1_By Gender"], use_container_width=True)
+                st.markdown("#### By Category")
+                st.dataframe(excel_sheets["1_By Category"], use_container_width=True)
+
+        with preview_tabs[1]:
+            st.subheader("2 · Graft Health Trends Across Follow-Up Windows")
+            st.markdown("#### Graft Health Overall")
+            st.dataframe(excel_sheets["2_Graft Overall"], use_container_width=True)
+            st.markdown("#### Graft Health by Surgery Type")
+            st.dataframe(excel_sheets["2_Graft by Surgery"], use_container_width=True)
+
+        with preview_tabs[2]:
+            st.subheader("3 · Follow-Up Adherence & Visit Statistics")
+            st.markdown("#### Overall Adherence Status")
+            st.dataframe(excel_sheets["3_Adherence Overall"], use_container_width=True)
+            st.markdown("#### Average Visits by Procedure")
+            st.dataframe(excel_sheets["3_Avg Visits by Proc"], use_container_width=True)
+
+        with preview_tabs[3]:
+            st.subheader("4 · Failed & Infection Cases")
+            col_f1, col_f2 = st.columns(2)
+            with col_f1:
+                st.markdown(f"#### Failed Graft Cases ({len(excel_sheets['4_Failed Cases'])})")
+                st.dataframe(excel_sheets["4_Failed Cases"], use_container_width=True)
+            with col_f2:
+                st.markdown(f"#### Infection / Infiltrate Cases ({len(excel_sheets['4_Infection Cases'])})")
+                st.dataframe(excel_sheets["4_Infection Cases"], use_container_width=True)
+
+        with preview_tabs[4]:
+            st.subheader("5 · Repeat Surgery Breakdown")
+            col_r1, col_r2 = st.columns(2)
+            with col_r1:
+                st.markdown("#### Overall Repeat Categories")
+                st.dataframe(excel_sheets["5_Repeat Overall"], use_container_width=True)
+            with col_r2:
+                st.markdown("#### Keratoplasty (KP) Repeat Details")
+                st.dataframe(excel_sheets["5_KP Details"], use_container_width=True)
+
+        with preview_tabs[5]:
+            st.subheader("6 · Visual Acuity (LogMAR) Changes (non-THPK)")
+            st.markdown("#### Average LogMAR Improvement by Procedure")
+            st.dataframe(excel_sheets["6_VA Avg by Proc"], use_container_width=True)
+            st.markdown("#### Line Change Distribution")
+            available_lines = [s for s in excel_sheets if s.startswith("6_VA Lines")]
+            if available_lines:
+                st.dataframe(excel_sheets[available_lines[0]], use_container_width=True)
+
 else:
-    with st.spinner("Reading uploaded file and running analysis pipeline..."):
-        try:
-            df_raw = read_uploaded_file(uploaded_file)
-            excel_bytes, excel_sheets, stats = run_analysis_pipeline(df_raw)
-            st.success(f"✓ Analysis complete! Processed **{stats['total_surgeries']:,}** surgeries across **{stats['sheets_count']}** result tabs.")
-        except Exception as e:
-            st.error(f"❌ Error processing file: {e}")
-            st.stop()
+    # ==============================================================================
+    # Mode 2: 3-Month Trend Analysis
+    # ==============================================================================
+    st.markdown("<div class='main-header'>📈 3-Month Clinical Quality Trends</div>", unsafe_allow_html=True)
+    st.markdown("<div class='sub-header'>Compare 1-Month Follow-Up Adherence and Resurgery Rates across 3 consecutive monthly surgical cohorts.</div>", unsafe_allow_html=True)
 
-    # Metrics Display
-    st.markdown("### Key Statistics Overview")
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Primary Surgeries", f"{stats['total_surgeries']:,}")
-    c2.metric("Unique Patients", f"{stats['unique_patients']:,}")
-    c3.metric("Failed Graft Cases", f"{stats['failed_cases']:,}")
-    c4.metric("Infection Cases", f"{stats['infection_cases']:,}")
-    c5.metric("Repeat Surgeries", f"{stats['repeat_surgeries']:,}")
+    with st.sidebar:
+        st.header("Upload 3 Monthly Files")
+        file_m1 = st.file_uploader("Month 1 Data File", type=["xlsb", "xlsx", "xlsm", "xls", "csv"], key="m1_uploader")
+        file_m2 = st.file_uploader("Month 2 Data File", type=["xlsb", "xlsx", "xlsm", "xls", "csv"], key="m2_uploader")
+        file_m3 = st.file_uploader("Month 3 Data File", type=["xlsb", "xlsx", "xlsm", "xls", "csv"], key="m3_uploader")
+        st.markdown("---")
+        st.markdown("### Clinical Definitions:")
+        st.markdown("- 📅 **1M Adherence:** Post-op visit attended between **11 and 45 days**.")
+        st.markdown("- 🔄 **1M Resurgery:** Repeat procedure occurring strictly between **11 and 45 days**.")
+        st.markdown("- 🔍 **Breakdowns:** Overall, Campus, Surgery Type, Resurgery Categories.")
 
-    st.markdown("---")
-    
-    # Download Section
-    st.markdown("### 📥 Download Resultant Analysis Workbook")
-    out_filename = f"Morbidity_Analysis_Results_{datetime.now().strftime('%b%Y')}.xlsx"
-    st.download_button(
-        label=f"⬇️ Download Executive Report ({out_filename})",
-        data=excel_bytes,
-        file_name=out_filename,
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        help="Download the complete executive report formatted with colors, filters, and double bottom borders."
-    )
+    uploaded_files = [file_m1, file_m2, file_m3]
+    missing = [f"Month {i}" for i, f in enumerate(uploaded_files, 1) if f is None]
 
-    st.markdown("---")
+    if missing:
+        st.info(f"👆 Please upload all 3 monthly data files in the sidebar to begin trend analysis. Currently missing: **{', '.join(missing)}**.")
+        st.markdown("""
+        ### Multi-Month Trend Pipeline
+        This mode analyzes 3 consecutive months to track:
+        1. **1-Month Follow-Up Adherence Trends** (Overall, by Campus, by Surgery Procedure).
+        2. **1-Month Resurgery Rate Trends** (Overall, by Campus, by Surgery Procedure).
+        3. **Resurgery Category Breakdown Trends** (Rebubbling, Wound Resuturing, KP, Others).
+        
+        **Outputs Generated:**
+        - 📥 **Executive Excel Workbook** (`3_Month_Trends_Results.xlsx`) with 6 formatted trend sheets.
+        - 📄 **Executive PDF Charts Report** (`3_Month_Trends_Report.pdf`) with all high-resolution trend charts.
+        """)
+    else:
+        m_labels = [extract_month_label(f.name, idx + 1) for idx, f in enumerate(uploaded_files)]
 
-    # Preview Tabs
-    st.markdown("### 📊 Interactive Data Previews")
-    preview_tabs = st.tabs([
-        "1. Surgery Counts",
-        "2. Graft Health",
-        "3. Adherence",
-        "4. Failed & Infection",
-        "5. Repeat Surgeries",
-        "6. Visual Acuity Change"
-    ])
+        st.markdown("### 🗓️ Detected Cohort Months")
+        col_l1, col_l2, col_l3 = st.columns(3)
+        with col_l1:
+            lbl_1 = st.text_input("Month 1 Label", value=m_labels[0], key="lbl_1")
+        with col_l2:
+            lbl_2 = st.text_input("Month 2 Label", value=m_labels[1], key="lbl_2")
+        with col_l3:
+            lbl_3 = st.text_input("Month 3 Label", value=m_labels[2], key="lbl_3")
 
-    with preview_tabs[0]:
-        st.subheader("1 · Surgery Counts & Demographics")
-        col_a, col_b = st.columns(2)
-        with col_a:
-            st.markdown("#### By Surgery Type")
-            st.dataframe(excel_sheets["1_By SurgType"], use_container_width=True)
-            st.markdown("#### By Campus")
-            st.dataframe(excel_sheets["1_By Campus"], use_container_width=True)
-        with col_b:
-            st.markdown("#### By Gender")
-            st.dataframe(excel_sheets["1_By Gender"], use_container_width=True)
-            st.markdown("#### By Category")
-            st.dataframe(excel_sheets["1_By Category"], use_container_width=True)
+        active_labels = [lbl_1, lbl_2, lbl_3]
 
-    with preview_tabs[1]:
-        st.subheader("2 · Graft Health Trends Across Follow-Up Windows")
-        st.markdown("#### Graft Health Overall")
-        st.dataframe(excel_sheets["2_Graft Overall"], use_container_width=True)
-        st.markdown("#### Graft Health by Surgery Type")
-        st.dataframe(excel_sheets["2_Graft by Surgery"], use_container_width=True)
+        with st.spinner("Processing 3-month cohort datasets and generating trend analysis..."):
+            try:
+                month_results = {}
+                for lbl, fl in zip(active_labels, uploaded_files):
+                    df_cleaned = load_and_clean_month_df(fl)
+                    res = process_single_month(df_cleaned)
+                    month_results[lbl] = res
 
-    with preview_tabs[2]:
-        st.subheader("3 · Follow-Up Adherence & Visit Statistics")
-        st.markdown("#### Overall Adherence Status")
-        st.dataframe(excel_sheets["3_Adherence Overall"], use_container_width=True)
-        st.markdown("#### Average Visits by Procedure")
-        st.dataframe(excel_sheets["3_Avg Visits by Proc"], use_container_width=True)
+                trend_tables = build_3month_trend_tables(month_results)
+                trend_excel_bytes = create_trend_excel(trend_tables)
+                trend_pdf_bytes = create_trend_pdf(trend_tables, active_labels)
+                st.success("✓ 3-Month Trend Analysis complete! All trend tables, charts, and reports generated.")
+            except Exception as e:
+                st.error(f"❌ Error processing trend data: {e}")
+                st.stop()
 
-    with preview_tabs[3]:
-        st.subheader("4 · Failed & Infection Cases")
-        col_f1, col_f2 = st.columns(2)
-        with col_f1:
-            st.markdown(f"#### Failed Graft Cases ({len(excel_sheets['4_Failed Cases'])})")
-            st.dataframe(excel_sheets["4_Failed Cases"], use_container_width=True)
-        with col_f2:
-            st.markdown(f"#### Infection / Infiltrate Cases ({len(excel_sheets['4_Infection Cases'])})")
-            st.dataframe(excel_sheets["4_Infection Cases"], use_container_width=True)
+        # Key Metrics Overview
+        tot_surgeries = sum(len(res["surgery_df"]) for res in month_results.values())
+        tot_adherent = sum(res["surgery_df"]["is_adherent_1m"].sum() for res in month_results.values())
+        pooled_adh_pct = (tot_adherent / tot_surgeries * 100) if tot_surgeries > 0 else 0
+        tot_repeat = sum(len(res["repeat_1m"]) for res in month_results.values())
+        pooled_rep_pct = (tot_repeat / tot_surgeries * 100) if tot_surgeries > 0 else 0
 
-    with preview_tabs[4]:
-        st.subheader("5 · Repeat Surgery Breakdown")
-        col_r1, col_r2 = st.columns(2)
-        with col_r1:
-            st.markdown("#### Overall Repeat Categories")
-            st.dataframe(excel_sheets["5_Repeat Overall"], use_container_width=True)
-        with col_r2:
-            st.markdown("#### Keratoplasty (KP) Repeat Details")
-            st.dataframe(excel_sheets["5_KP Details"], use_container_width=True)
+        m1_adh = month_results[active_labels[0]]["surgery_df"]["is_adherent_1m"].mean() * 100
+        m3_adh = month_results[active_labels[2]]["surgery_df"]["is_adherent_1m"].mean() * 100
+        delta_adh = m3_adh - m1_adh
 
-    with preview_tabs[5]:
-        st.subheader("6 · Visual Acuity (LogMAR) Changes (non-THPK)")
-        st.markdown("#### Average LogMAR Improvement by Procedure")
-        st.dataframe(excel_sheets["6_VA Avg by Proc"], use_container_width=True)
-        st.markdown("#### Line Change Distribution")
-        available_lines = [s for s in excel_sheets if s.startswith("6_VA Lines")]
-        if available_lines:
-            st.dataframe(excel_sheets[available_lines[0]], use_container_width=True)
+        m1_rep = len(month_results[active_labels[0]]["repeat_1m"]) / len(month_results[active_labels[0]]["surgery_df"]) * 100 if len(month_results[active_labels[0]]["surgery_df"]) > 0 else 0
+        m3_rep = len(month_results[active_labels[2]]["repeat_1m"]) / len(month_results[active_labels[2]]["surgery_df"]) * 100 if len(month_results[active_labels[2]]["surgery_df"]) > 0 else 0
+        delta_rep = m3_rep - m1_rep
+
+        st.markdown("### 📊 3-Month Key Performance Indicators")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("3-Month Surgeries", f"{tot_surgeries:,}")
+        c2.metric("3M Adherence Rate", f"{pooled_adh_pct:.1f}%", delta=f"{delta_adh:+.1f}% (M3 vs M1)")
+        c3.metric("3M Resurgery Rate", f"{pooled_rep_pct:.2f}%", delta=f"{delta_rep:+.2f}% (M3 vs M1)", delta_color="inverse")
+        c4.metric("Total 1M Resurgeries", f"{tot_repeat:,}")
+
+        st.markdown("---")
+
+        # Download Section
+        st.markdown("### 📥 Download Trend Deliverables")
+        d_col1, d_col2 = st.columns(2)
+        with d_col1:
+            st.download_button(
+                label="⬇️ Download Executive Trend Excel (6 Sheets)",
+                data=trend_excel_bytes,
+                file_name=f"3_Month_Trends_Results_{datetime.now().strftime('%b%Y')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                help="Excel workbook containing side-by-side trend tables for Adherence and Resurgeries."
+            )
+        with d_col2:
+            st.download_button(
+                label="📄 Download Executive Trend PDF Charts Report",
+                data=trend_pdf_bytes,
+                file_name=f"3_Month_Trends_Report_{datetime.now().strftime('%b%Y')}.pdf",
+                mime="application/pdf",
+                help="Multi-page PDF document containing all high-resolution trend charts."
+            )
+
+        st.markdown("---")
+
+        # Interactive Trend Data Tabs
+        st.markdown("### 📈 Interactive Trend Tables & Breakdown")
+        t_tabs = st.tabs([
+            "1. Overall Trends",
+            "2. Campus Trends",
+            "3. Surgery Procedure Trends",
+            "4. Resurgery Breakdown"
+        ])
+
+        with t_tabs[0]:
+            st.subheader("1 · Overall Monthly Adherence & Resurgery Rate Trends")
+            st.markdown("#### Follow-Up Adherence Trend (Overall)")
+            st.dataframe(trend_tables["1_Trend_Adherence_Overall"], use_container_width=True)
+            st.markdown("#### Resurgery Rate Trend (Overall & Categories)")
+            st.dataframe(trend_tables["4_Trend_Resurgery_Overall"], use_container_width=True)
+
+        with t_tabs[1]:
+            st.subheader("2 · Campus Trends (11–45 Days)")
+            st.markdown("#### 1M Follow-Up Adherence by Campus")
+            st.dataframe(trend_tables["2_Trend_Adherence_Campus"], use_container_width=True)
+            st.markdown("#### 1M Resurgery Rates by Campus")
+            st.dataframe(trend_tables["5_Trend_Resurgery_Campus"], use_container_width=True)
+
+        with t_tabs[2]:
+            st.subheader("3 · Surgery Procedure Trends (11–45 Days)")
+            st.markdown("#### 1M Follow-Up Adherence by Surgery Procedure")
+            st.dataframe(trend_tables["3_Trend_Adherence_SurgType"], use_container_width=True)
+            st.markdown("#### 1M Resurgery Rates by Surgery Procedure")
+            st.dataframe(trend_tables["6_Trend_Resurgery_SurgType"], use_container_width=True)
+
+        with t_tabs[3]:
+            st.subheader("4 · Resurgery Category Breakdown Trend")
+            st.markdown("#### Count and Percentage by Repeat Category across 3 Months")
+            st.dataframe(trend_tables["4_Trend_Resurgery_Overall"], use_container_width=True)
