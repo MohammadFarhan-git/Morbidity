@@ -472,37 +472,88 @@ def build_3month_trend_tables(month_results: dict[str, dict]) -> dict[str, pd.Da
     df_rep_overall = pd.DataFrame(t4_rows)
 
     # ─────────────────────────────────────────────────────────────
-    # Helper for Grouped Resurgery Trend (11–45 Days)
     # ─────────────────────────────────────────────────────────────
-    def _grouped_resurgery_trend(group_col: str, group_label: str) -> pd.DataFrame:
-        groups = sorted(comb_surg[group_col].dropna().unique())
+    # Helper for Grouped Resurgery Breakdown (Overall & Categories) (11–45 Days)
+    # ─────────────────────────────────────────────────────────────
+    def _grouped_resurgery_breakdown(group_col: str, group_label: str) -> pd.DataFrame:
+        groups = sorted(list(set().union(*[month_results[m]["surgery_df"][group_col].dropna().unique() for m in month_keys])))
         rows = []
         for g in groups:
-            r = {group_label: g}
-            g_pooled_surg = 0
-            g_pooled_resurg = 0
-            for m in month_keys:
-                msurg = month_results[m]["surgery_df"]
-                sub = msurg[msurg[group_col] == g]
-                s_cnt = len(sub)
-                r_cnt = sub["has_graft_resurgery_1m"].sum() if s_cnt > 0 else 0
-                pct = round(r_cnt / s_cnt * 100, 2) if s_cnt > 0 else 0.0
-                r[f"{m} Surgeries"] = s_cnt
-                r[f"{m} Graft Resurg % (11–45d)"] = pct
-                r[f"{m} Repeat Surg % (11–45d)"] = pct
-                g_pooled_surg += s_cnt
-                g_pooled_resurg += r_cnt
+            tot_s = {m: len(month_results[m]["surgery_df"][month_results[m]["surgery_df"][group_col] == g]) for m in month_keys}
+            pool_s = sum(tot_s.values())
+            if pool_s == 0:
+                continue
 
-            p_pct = round(g_pooled_resurg / g_pooled_surg * 100, 2) if g_pooled_surg > 0 else 0.0
-            r["3-Month Surgeries"] = g_pooled_surg
-            r["3-Month Graft Resurg % (11–45d)"] = p_pct
-            r["3-Month Repeat Surg % (11–45d)"] = p_pct
-            r["Trend (M3 vs M1)"] = round(r[f"{m3} Repeat Surg % (11–45d)"] - r[f"{m1} Repeat Surg % (11–45d)"], 2)
-            rows.append(r)
+            # 1. Total Primary Surgeries
+            rows.append({
+                group_label: g,
+                "Category": "Total Primary Surgeries",
+                m1: tot_s[m1], m2: tot_s[m2], m3: tot_s[m3],
+                "3-Month Total": pool_s,
+                "Trend (M3 vs M1)": tot_s[m3] - tot_s[m1]
+            })
+
+            # 2. Total Real Repeat Surgeries
+            real_cnt = {m: month_results[m]["surgery_df"][(month_results[m]["surgery_df"][group_col] == g) & (month_results[m]["surgery_df"]["has_graft_resurgery_1m"])].shape[0] for m in month_keys}
+            pool_real = sum(real_cnt.values())
+            pcts = {m: round(real_cnt[m] / tot_s[m] * 100, 2) if tot_s[m] > 0 else 0.0 for m in month_keys}
+            p_pct = round(pool_real / pool_s * 100, 2) if pool_s > 0 else 0.0
+            rows.append({
+                group_label: g,
+                "Category": "  Total Real Repeat Surgeries (Rebubbling, Resuturing, KP)",
+                m1: f"{real_cnt[m1]} ({pcts[m1]}%)",
+                m2: f"{real_cnt[m2]} ({pcts[m2]}%)",
+                m3: f"{real_cnt[m3]} ({pcts[m3]}%)",
+                "3-Month Total": f"{pool_real} ({p_pct}%)",
+                "Trend (M3 vs M1)": f"{pcts[m3] - pcts[m1]:+.2f}%"
+            })
+
+            # 3. Specific Real Repeat Categories: REBUBBLING, WOUND_RESUTURING, KP
+            for sub in ["REBUBBLING", "WOUND_RESUTURING", "KP"]:
+                cnts = {m: month_results[m]["repeat_1m"][(month_results[m]["repeat_1m"][group_col] == g) & (month_results[m]["repeat_1m"]["Repeat_Category"] == sub)].shape[0] for m in month_keys}
+                p_cnt = sum(cnts.values())
+                rows.append({
+                    group_label: g,
+                    "Category": f"    • {sub}",
+                    m1: cnts[m1], m2: cnts[m2], m3: cnts[m3],
+                    "3-Month Total": p_cnt,
+                    "Trend (M3 vs M1)": cnts[m3] - cnts[m1]
+                })
+
+            # 4. Others (Minor Procedures)
+            oth_cnt = {m: month_results[m]["repeat_1m"][(month_results[m]["repeat_1m"][group_col] == g) & (month_results[m]["repeat_1m"]["Repeat_Category"] == "Others")].shape[0] for m in month_keys}
+            p_oth = sum(oth_cnt.values())
+            oth_pcts = {m: round(oth_cnt[m] / tot_s[m] * 100, 2) if tot_s[m] > 0 else 0.0 for m in month_keys}
+            p_oth_pct = round(p_oth / pool_s * 100, 2) if pool_s > 0 else 0.0
+            rows.append({
+                group_label: g,
+                "Category": "  Others (Minor Procedures)",
+                m1: f"{oth_cnt[m1]} ({oth_pcts[m1]}%)",
+                m2: f"{oth_cnt[m2]} ({oth_pcts[m2]}%)",
+                m3: f"{oth_cnt[m3]} ({oth_pcts[m3]}%)",
+                "3-Month Total": f"{p_oth} ({p_oth_pct}%)",
+                "Trend (M3 vs M1)": f"{oth_pcts[m3] - oth_pcts[m1]:+.2f}%" if tot_s[m3] > 0 and tot_s[m1] > 0 else "---"
+            })
+
+            # 5. Total Combined Re-interventions
+            all_re = {m: month_results[m]["repeat_1m"][month_results[m]["repeat_1m"][group_col] == g].shape[0] for m in month_keys}
+            p_all = sum(all_re.values())
+            all_pcts = {m: round(all_re[m] / tot_s[m] * 100, 2) if tot_s[m] > 0 else 0.0 for m in month_keys}
+            p_all_pct = round(p_all / pool_s * 100, 2) if pool_s > 0 else 0.0
+            rows.append({
+                group_label: g,
+                "Category": "  Total Combined Re-interventions (All)",
+                m1: f"{all_re[m1]} ({all_pcts[m1]}%)",
+                m2: f"{all_re[m2]} ({all_pcts[m2]}%)",
+                m3: f"{all_re[m3]} ({all_pcts[m3]}%)",
+                "3-Month Total": f"{p_all} ({p_all_pct}%)",
+                "Trend (M3 vs M1)": f"{all_re[m3] - all_re[m1]:+d}"
+            })
+
         return pd.DataFrame(rows)
 
-    df_rep_campus = _grouped_resurgery_trend("sap_code", "Campus")
-    df_rep_surg = _grouped_resurgery_trend("surg_proc_group", "Surgery Procedure")
+    df_rep_campus = _grouped_resurgery_breakdown("sap_code", "Campus")
+    df_rep_surg = _grouped_resurgery_breakdown("surg_proc_group", "Surgery Procedure")
 
     return {
         "1_Trend_Adherence_Overall": df_adh_overall,
@@ -848,22 +899,26 @@ def create_trend_pptx(trend_tables: dict[str, pd.DataFrame], month_names: list[s
     )
 
     fig, ax = plt.subplots(figsize=(11.5, 5.2), dpi=180)
-    campuses_rep = df_rep_camp["Campus"].tolist()
+    sub_camp = df_rep_camp[df_rep_camp["Category"].str.contains("Total Real Repeat")]
+    campuses_rep = sub_camp["Campus"].tolist()
     x = np.arange(len(campuses_rep))
     width = 0.25
 
     for idx, m in enumerate(months):
-        rates = df_rep_camp[f"{m} Graft Resurg % (11–45d)"].tolist()
+        rates = []
+        for val_str in sub_camp[m]:
+            match = re.search(r'\(([\d.]+)%\)', str(val_str))
+            rates.append(float(match.group(1)) if match else 0.0)
         bars = ax.bar(x + (idx - 1) * width, rates, width, label=m, color=colors[idx % len(colors)], alpha=0.85)
         for bar in bars:
             h = bar.get_height()
             if h > 0:
                 ax.annotate(f"{h:.1f}%", xy=(bar.get_x() + bar.get_width() / 2, h), xytext=(0, 3), textcoords="offset points", ha='center', va='bottom', fontsize=8.5, fontweight='bold')
 
-    ax.set_title("Graft Resurgery Rate by Campus across 3 Months (Window: 11–45 Days)", fontsize=13, fontweight='bold', color=c_blue, pad=12)
+    ax.set_title("Real Repeat Surgery Rate by Campus across 3 Months (Window: 11–45 Days)", fontsize=13, fontweight='bold', color=c_blue, pad=12)
     ax.set_xticks(x)
     ax.set_xticklabels(campuses_rep, fontsize=10, fontweight='bold')
-    ax.set_ylabel("Graft Resurgery Rate (%)", fontsize=10)
+    ax.set_ylabel("Repeat Surgery Rate (%)", fontsize=10)
     ax.set_ylim(0, max([bar.get_height() for bar in ax.patches] + [6]) * 1.3)
     ax.legend(frameon=True, facecolor="#F8F9FA", loc="upper right")
     ax.grid(True, axis='y', linestyle="--", alpha=0.4)
@@ -956,22 +1011,26 @@ def create_trend_pptx(trend_tables: dict[str, pd.DataFrame], month_names: list[s
     )
 
     fig, ax = plt.subplots(figsize=(11.5, 5.2), dpi=180)
-    procs_rep = df_rep_surg["Surgery Procedure"].tolist()
+    sub_surg = df_rep_surg[df_rep_surg["Category"].str.contains("Total Real Repeat")]
+    procs_rep = sub_surg["Surgery Procedure"].tolist()
     x = np.arange(len(procs_rep))
     width = 0.25
 
     for idx, m in enumerate(months):
-        rates = df_rep_surg[f"{m} Graft Resurg % (11–45d)"].tolist()
+        rates = []
+        for val_str in sub_surg[m]:
+            match = re.search(r'\(([\d.]+)%\)', str(val_str))
+            rates.append(float(match.group(1)) if match else 0.0)
         bars = ax.bar(x + (idx - 1) * width, rates, width, label=m, color=colors[idx % len(colors)], alpha=0.85)
         for bar in bars:
             h = bar.get_height()
             if h > 0:
                 ax.annotate(f"{h:.1f}%", xy=(bar.get_x() + bar.get_width() / 2, h), xytext=(0, 3), textcoords="offset points", ha='center', va='bottom', fontsize=8, fontweight='bold')
 
-    ax.set_title("Graft Resurgery Rate by Procedure Group across 3 Months (Window: 11–45 Days)", fontsize=13, fontweight='bold', color=c_blue, pad=12)
+    ax.set_title("Real Repeat Surgery Rate by Procedure Group across 3 Months (Window: 11–45 Days)", fontsize=13, fontweight='bold', color=c_blue, pad=12)
     ax.set_xticks(x)
     ax.set_xticklabels(procs_rep, fontsize=9.5, fontweight='bold', rotation=15)
-    ax.set_ylabel("Graft Resurgery Rate (%)", fontsize=10)
+    ax.set_ylabel("Repeat Surgery Rate (%)", fontsize=10)
     ax.set_ylim(0, max([bar.get_height() for bar in ax.patches] + [6]) * 1.3)
     ax.legend(frameon=True, facecolor="#F8F9FA", loc="upper right")
     ax.grid(True, axis='y', linestyle="--", alpha=0.4)
@@ -2083,32 +2142,26 @@ else:
         t_tabs = st.tabs([
             "1. Overall Trends",
             "2. Campus Trends",
-            "3. Surgery Procedure Trends",
-            "4. Resurgery Breakdown"
+            "3. Surgery Procedure Trends"
         ])
 
         with t_tabs[0]:
             st.subheader("1 · Overall Monthly Adherence & Resurgery Rate Trends")
-            st.markdown("#### Follow-Up Adherence Trend (Overall)")
+            st.markdown("#### Follow-Up Adherence Trend (Overall) [11–45 Days]")
             st.dataframe(trend_tables["1_Trend_Adherence_Overall"], use_container_width=True)
-            st.markdown("#### Resurgery Rate Trend (Overall & Categories)")
+            st.markdown("#### Resurgery Rate Trend & Category Breakdown (Overall) [11–45 Days]")
             st.dataframe(trend_tables["4_Trend_Resurgery_Overall"], use_container_width=True)
 
         with t_tabs[1]:
             st.subheader("2 · Campus Trends (11–45 Days)")
             st.markdown("#### 1M Follow-Up Adherence by Campus")
             st.dataframe(trend_tables["2_Trend_Adherence_Campus"], use_container_width=True)
-            st.markdown("#### 1M Resurgery Rates by Campus")
+            st.markdown("#### 1M Resurgery Rates & Category Breakdown by Campus (Real vs Minor)")
             st.dataframe(trend_tables["5_Trend_Resurgery_Campus"], use_container_width=True)
 
         with t_tabs[2]:
             st.subheader("3 · Surgery Procedure Trends (11–45 Days)")
             st.markdown("#### 1M Follow-Up Adherence by Surgery Procedure")
             st.dataframe(trend_tables["3_Trend_Adherence_SurgType"], use_container_width=True)
-            st.markdown("#### 1M Resurgery Rates by Surgery Procedure")
+            st.markdown("#### 1M Resurgery Rates & Category Breakdown by Surgery Procedure (Real vs Minor)")
             st.dataframe(trend_tables["6_Trend_Resurgery_SurgType"], use_container_width=True)
-
-        with t_tabs[3]:
-            st.subheader("4 · Resurgery Category Breakdown Trend")
-            st.markdown("#### Count and Percentage by Repeat Category across 3 Months")
-            st.dataframe(trend_tables["4_Trend_Resurgery_Overall"], use_container_width=True)
