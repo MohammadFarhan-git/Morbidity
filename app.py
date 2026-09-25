@@ -22,14 +22,14 @@ import numpy as np
 import openpyxl
 import pandas as pd
 import streamlit as st
-from src.trend_analysis import (
-    load_and_clean_month_df,
-    process_single_month,
-    build_3month_trend_tables,
-    create_trend_excel,
-    create_trend_pdf,
-    extract_month_label,
-)
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import pptx
+from pptx.util import Inches, Pt
+from pptx.dml.color import RGBColor
+from pptx.enum.text import PP_ALIGN
+from pptx.enum.shapes import MSO_SHAPE
 
 
 # ==============================================================================
@@ -118,6 +118,7 @@ REPEAT_KP_PROCS = {
     "PENETRATING KERATOPLASTY (PK)",
     "DESCEMET MEMBRANE ENDOTHLIAL KERATOPLASTY (DMEK)",
     "ECCE + IOL,PENETRATING KERATOPLASTY (PK),TARSORRAPHY",
+    "DEEP ANTERIOR LAMELLAR KERATOPLASTY (DALK)",
 }
 
 PREFIX_MAP = {"PN": "P", "NP": "N", "NPC": "CC", "PNC": "CC", "NPN": "N", "PNP": "P"}
@@ -127,6 +128,965 @@ AGE_LABELS = ["<18yr", "18-40yr", "41-60yr", "61-80yr", "80+yr"]
 # ==============================================================================
 # Helper Data Processing Functions
 # ==============================================================================
+# ==============================================================================
+# Multi-Month Trend Analysis Functions (Self-Contained)
+# ==============================================================================
+def extract_month_label(filename_or_str: str, fallback_idx: int = 1) -> str:
+    """Extract month name and year (if present) from a filename string."""
+    if not filename_or_str:
+        return f"Month {fallback_idx}"
+    months = {
+        'jan': 'January', 'feb': 'February', 'mar': 'March', 'apr': 'April',
+        'may': 'May', 'jun': 'June', 'jul': 'July', 'aug': 'August',
+        'sep': 'September', 'oct': 'October', 'nov': 'November', 'dec': 'December'
+    }
+    s = str(filename_or_str).lower()
+    for m_short, m_full in months.items():
+        match = re.search(rf'({m_short}[a-z]*)\s*[-_]?\s*(\d{{4}})?', s)
+        if match:
+            year = match.group(2)
+            return f"{m_full} {year}" if year else m_full
+    return f"Month {fallback_idx}"
+
+
+def correct_mrno(mrno) -> str:
+    if pd.isna(mrno):
+        return ""
+    mrno_str = str(mrno).strip()
+    match = re.search(r"(?:.*-)?([A-Z]+)(\d+)$", mrno_str)
+    if match:
+        prefix, digits = match.groups()
+        new_prefix = PREFIX_MAP.get(prefix, prefix)
+        return re.sub(r"([A-Z]+)(\d+)$", new_prefix + digits, mrno_str)
+    return mrno_str
+
+
+def categorize_repeat_surgery(proc_name, adv_proc_name=None) -> tuple[str, bool]:
+    """
+    Categorizes post-op re-interventions into clinical procedure groups.
+    Returns: (Category_Name, is_graft_resurgery: bool)
+    
+    True Graft-Specific Resurgeries (Graft Re-operations):
+      - Rebubbling / Descematopexy
+      - Wound Resuturing
+      - Repeat Keratoplasty (KP)
+      
+    Supportive / In-Clinic Interventions (Non-graft revisions):
+      - IOAB / Antibiotic Injections
+      - EUA / Examination Under Anesthesia
+      - Tarsorrhaphy / Surface Protection
+      - AC Wash / Reformation
+      - Vitreoretinal Procedures
+      - Other Minor Procedures
+    """
+    name = proc_name if (pd.notna(proc_name) and str(proc_name).strip() != "") else adv_proc_name
+    if pd.isna(name) or not str(name).strip():
+        return ("Other Minor Procedures", False)
+
+    s = str(name).strip().upper()
+
+    # 1. Repeat Keratoplasty (Graft replacement)
+    if any(k in s for k in ['KERATOPLASTY', 'TH PK', 'DSAEK', 'DMEK', 'DALK']) or s == 'PENETRATING KERATOPLASTY (PK)':
+        return ("Repeat Keratoplasty (KP)", True)
+
+    # 2. Rebubbling & Descematopexy
+    if 'REBUBBLING' in s or 'DESCMETOPEXY' in s or 'DESCEMETOPE' in s:
+        return ("Rebubbling / Descematopexy", True)
+
+    # 3. Wound Resuturing (including compound procedures with resuturing)
+    if 'WOUND RESUTURING' in s or 'RESUTURING' in s:
+        return ("Wound Resuturing", True)
+
+    # 4. Antibiotic Injections (IOAB / Intracameral / Intrastromal)
+    if 'IOAB' in s or 'ANTIBIOTIC INJ' in s or 'INTRAOCULAR ANTIBIOTIC' in s:
+        return ("IOAB / Antibiotic Injection", False)
+
+    # 5. Examination Under Anesthesia / Microscope
+    if 'EXAMINATION UNDER' in s or 'EUA' in s or 'EUM' in s:
+        return ("EUA / Examination", False)
+
+    # 6. Surface Protection & Tarsorrhaphy
+    if 'TARSORRAPHY' in s or 'GLUE' in s or 'BCL' in s or 'AMNIOTIC' in s or 'TENONS PATCH' in s:
+        return ("Tarsorrhaphy / Surface Protection", False)
+
+    # 7. Anterior Chamber Interventions
+    if 'AC WASH' in s or 'AC REFORMATION' in s or 'AC TAP' in s:
+        return ("AC Wash / Reformation", False)
+
+    # 8. Vitreoretinal Procedures
+    if 'VITRECTOMY' in s or 'PPV' in s or 'VITREOUS' in s or 'SILICONE OIL' in s:
+        return ("Vitreoretinal Procedure", False)
+
+    return ("Other Minor Procedures", False)
+
+
+def load_and_clean_month_df(file_source) -> pd.DataFrame:
+    """Load campus sheets from an excel file buffer or path, standardizing dates and columns."""
+    dfs = []
+    fname = getattr(file_source, 'name', str(file_source)).lower()
+    xl_engine = 'pyxlsb' if fname.endswith('.xlsb') else None
+    try:
+        if isinstance(file_source, (str, os.PathLike)):
+            xl = pd.ExcelFile(file_source, engine=xl_engine)
+        elif hasattr(file_source, 'getvalue'):
+            xl = pd.ExcelFile(io.BytesIO(file_source.getvalue()), engine=xl_engine)
+        elif hasattr(file_source, 'read'):
+            b = file_source.read()
+            if hasattr(file_source, 'seek'):
+                file_source.seek(0)
+            xl = pd.ExcelFile(io.BytesIO(b), engine=xl_engine)
+        else:
+            xl = pd.ExcelFile(file_source, engine=xl_engine)
+
+        available = xl.sheet_names
+        matching_sheets = [s for s in available if s in CAMPUS_SHEETS or 'campus' in s.lower()]
+        if not matching_sheets:
+            matching_sheets = available
+
+        for s in matching_sheets:
+            df_top = pd.read_excel(xl, sheet_name=s, header=None, nrows=15)
+            hdr_row = 4
+            for idx, r in df_top.iterrows():
+                r_vals = [str(x).lower() for x in r.values]
+                if any(k in r_vals for k in ['sap_code', 'tp_mrno', 'surg_date', 'graft_health_text']):
+                    hdr_row = idx
+                    break
+            d = pd.read_excel(xl, sheet_name=s, header=hdr_row)
+            dfs.append(d)
+    except Exception:
+        df = pd.read_excel(file_source, engine=xl_engine)
+        dfs.append(df)
+
+    if not dfs:
+        return pd.DataFrame()
+
+    df = pd.concat(dfs, ignore_index=True)
+
+    for col in df.select_dtypes(include=["object", "string"]).columns:
+        df[col] = df[col].apply(lambda x: x.strip().upper() if isinstance(x, str) else x)
+
+    for col in ["visit_date", "surg_date", "dob", "fup_surg_date"]:
+        if col in df.columns:
+            parsed = pd.to_datetime(df[col], errors='coerce')
+            numeric = pd.to_numeric(df[col], errors='coerce')
+            valid_numeric = numeric.where(numeric.between(1, 100000))
+            excel_dates = pd.Timestamp("1899-12-30") + pd.to_timedelta(valid_numeric, unit="D", errors='coerce')
+            df[col] = parsed.fillna(excel_dates)
+
+    if "tp_mrno" in df.columns:
+        df["tp_mrno_corrected"] = df["tp_mrno"].apply(correct_mrno)
+    else:
+        df["tp_mrno_corrected"] = ""
+
+    for required_col in ["surg_eye", "surg_proc_group"]:
+        if required_col not in df.columns:
+            df[required_col] = "UNKNOWN"
+
+    df["id"] = (
+        df["tp_mrno_corrected"].astype(str) + "_" +
+        df["surg_eye"].astype(str) + "_" +
+        df["surg_proc_group"].astype(str) + "_" +
+        df["surg_date"].dt.strftime("%Y-%m-%d").fillna("")
+    )
+
+    df = df.dropna(how="all").dropna(subset=["id"]).sort_values(["id", "surg_date", "visit_date"])
+    df["days_after_surgery"] = (df["visit_date"] - df["surg_date"]).dt.days
+    return df
+
+
+def process_single_month(df: pd.DataFrame) -> dict:
+    """Extract primary surgeries, 1M adherence, and 1M repeat surgeries for a single month."""
+    for col_req in ['advise_surg', 'fup_surg_done', 'fup_done_surg_proc', 'adv_surg_proc']:
+        if col_req not in df.columns:
+            df[col_req] = None
+
+    # Identify repeat keratoplasties
+    repeat_mask = (
+        (df['visit_date'] > df['surg_date']) &
+        (df['advise_surg'] == 'YES') &
+        (df['fup_surg_done'] == 'YES') &
+        (df['fup_done_surg_proc'].isin(REPEAT_KP_PROCS))
+    )
+    repeat_dates = (
+        df.loc[repeat_mask]
+        .groupby('id', as_index=False)['fup_surg_date'].min()
+        .rename(columns={'fup_surg_date': 'first_repeat_keratoplasty_date'})
+    )
+    visit_df = df.merge(repeat_dates, on='id', how='left')
+    visit_df_primary = visit_df[
+        visit_df['first_repeat_keratoplasty_date'].isna() |
+        (visit_df['visit_date'] < visit_df['first_repeat_keratoplasty_date'])
+    ].copy()
+
+    # One row per primary surgery
+    surgery_df = visit_df_primary.groupby('id', as_index=False).first()
+
+    # 1-Month Follow-Up Adherence (Strictly 11 <= days_after_surgery <= 45)
+    fup_1m = visit_df_primary[visit_df_primary['days_after_surgery'].between(11, 45)]
+    adherent_ids = set(fup_1m['id'].unique())
+    surgery_df['is_adherent_1m'] = surgery_df['id'].isin(adherent_ids)
+
+    # 1-Month Resurgeries & Re-interventions (Strictly 11 <= days_after_surgery <= 45)
+    repeat_1m = visit_df_primary[
+        (visit_df_primary['days_after_surgery'].between(11, 45)) &
+        (visit_df_primary['advise_surg'] == 'YES') &
+        (visit_df_primary['fup_surg_done'] == 'YES')
+    ].copy()
+
+    # Categorize procedures
+    cats = [
+        categorize_repeat_surgery(row.get('fup_done_surg_proc'), row.get('adv_surg_proc'))
+        for _, row in repeat_1m.iterrows()
+    ]
+    repeat_1m['Repeat_Category'] = [c[0] for c in cats]
+    repeat_1m['is_graft_resurgery'] = [c[1] for c in cats]
+
+    # Tag primary surgeries that had true graft resurgeries vs any re-intervention
+    graft_resurg_ids = set(repeat_1m[repeat_1m['is_graft_resurgery']]['id'].unique())
+    any_reintervention_ids = set(repeat_1m['id'].unique())
+    surgery_df['has_graft_resurgery_1m'] = surgery_df['id'].isin(graft_resurg_ids)
+    surgery_df['has_any_reintervention_1m'] = surgery_df['id'].isin(any_reintervention_ids)
+
+    return {
+        "surgery_df": surgery_df,
+        "visit_df_primary": visit_df_primary,
+        "repeat_1m": repeat_1m,
+    }
+
+
+def build_3month_trend_tables(month_results: dict[str, dict]) -> dict[str, pd.DataFrame]:
+    """
+    Given dict of {month_label: process_single_month_output},
+    build side-by-side trend tables with explicit '1M (11–45 Days)' labeling
+    and clear clinical separation of Graft Resurgeries vs Supportive Interventions.
+    """
+    month_keys = list(month_results.keys())
+    m1, m2, m3 = month_keys[0], month_keys[1], month_keys[2]
+
+    # Combine primary surgeries
+    all_surgeries = []
+    all_repeats = []
+    for m in month_keys:
+        sdf = month_results[m]["surgery_df"].copy()
+        sdf["Month"] = m
+        all_surgeries.append(sdf)
+
+        rdf = month_results[m]["repeat_1m"].copy()
+        rdf["Month"] = m
+        all_repeats.append(rdf)
+
+    comb_surg = pd.concat(all_surgeries, ignore_index=True)
+    comb_repeat = pd.concat(all_repeats, ignore_index=True) if all_repeats else pd.DataFrame()
+
+    # ─────────────────────────────────────────────────────────────
+    # Table 1: Adherence Trend — Overall (11–45 Days)
+    # ─────────────────────────────────────────────────────────────
+    t1_rows = []
+    tot_surg = {m: len(month_results[m]["surgery_df"]) for m in month_keys}
+    adh_cnt = {m: month_results[m]["surgery_df"]["is_adherent_1m"].sum() for m in month_keys}
+    adh_pct = {m: (adh_cnt[m] / tot_surg[m] * 100).round(2) if tot_surg[m] > 0 else 0.0 for m in month_keys}
+
+    pooled_surg = sum(tot_surg.values())
+    pooled_adh = sum(adh_cnt.values())
+    pooled_pct = round((pooled_adh / pooled_surg * 100), 2) if pooled_surg > 0 else 0.0
+    delta_adh = round(adh_pct[m3] - adh_pct[m1], 2)
+
+    t1_rows.append({"Metric": "Total Primary Surgeries", m1: tot_surg[m1], m2: tot_surg[m2], m3: tot_surg[m3], "3-Month Total": pooled_surg, "Trend (M3 - M1)": tot_surg[m3] - tot_surg[m1]})
+    t1_rows.append({"Metric": "1M Adherent Surgeries (11–45 Days)", m1: adh_cnt[m1], m2: adh_cnt[m2], m3: adh_cnt[m3], "3-Month Total": pooled_adh, "Trend (M3 - M1)": adh_cnt[m3] - adh_cnt[m1]})
+    t1_rows.append({"Metric": "1M Adherence Rate (11–45 Days) [%]", m1: f"{adh_pct[m1]}%", m2: f"{adh_pct[m2]}%", m3: f"{adh_pct[m3]}%", "3-Month Total": f"{pooled_pct}%", "Trend (M3 - M1)": f"{delta_adh:+.2f}%"})
+    df_adh_overall = pd.DataFrame(t1_rows)
+
+    # ─────────────────────────────────────────────────────────────
+    # Helper for Grouped Adherence Trend (11–45 Days)
+    # ─────────────────────────────────────────────────────────────
+    def _grouped_adherence_trend(group_col: str, group_label: str) -> pd.DataFrame:
+        groups = sorted(comb_surg[group_col].dropna().unique())
+        rows = []
+        for g in groups:
+            r = {group_label: g}
+            g_pooled_surg = 0
+            g_pooled_adh = 0
+            for m in month_keys:
+                msurg = month_results[m]["surgery_df"]
+                sub = msurg[msurg[group_col] == g]
+                cnt = len(sub)
+                adh = sub["is_adherent_1m"].sum() if cnt > 0 else 0
+                pct = round(adh / cnt * 100, 2) if cnt > 0 else 0.0
+                r[f"{m} Surgeries"] = cnt
+                r[f"{m} Adherent % (11–45d)"] = pct
+                g_pooled_surg += cnt
+                g_pooled_adh += adh
+
+            pool_pct = round(g_pooled_adh / g_pooled_surg * 100, 2) if g_pooled_surg > 0 else 0.0
+            r["3-Month Surgeries"] = g_pooled_surg
+            r["3-Month Adherent % (11–45d)"] = pool_pct
+            r["Trend (M3 vs M1)"] = round(r[f"{m3} Adherent % (11–45d)"] - r[f"{m1} Adherent % (11–45d)"], 2)
+            rows.append(r)
+        return pd.DataFrame(rows)
+
+    df_adh_campus = _grouped_adherence_trend("sap_code", "Campus")
+    df_adh_surg = _grouped_adherence_trend("surg_proc_group", "Surgery Procedure")
+
+    # ─────────────────────────────────────────────────────────────
+    # Table 4: Resurgery Trend — Overall & Detailed Categories (11–45 Days)
+    # ─────────────────────────────────────────────────────────────
+    t4_rows = []
+
+    # Section 1: Denominator
+    t4_rows.append({
+        "Procedure Category": "Total Primary Surgeries",
+        m1: tot_surg[m1], m2: tot_surg[m2], m3: tot_surg[m3],
+        "3-Month Total": pooled_surg,
+        "Trend (M3 vs M1)": tot_surg[m3] - tot_surg[m1]
+    })
+
+    # Section 2: Graft-Specific Resurgeries (True Re-operations)
+    graft_cats = ["Rebubbling / Descematopexy", "Wound Resuturing", "Repeat Keratoplasty (KP)"]
+    
+    # Total Graft Resurgeries
+    g_resurg_cnt = {m: month_results[m]["surgery_df"]["has_graft_resurgery_1m"].sum() for m in month_keys}
+    g_resurg_pct = {m: round(g_resurg_cnt[m] / tot_surg[m] * 100, 2) if tot_surg[m] > 0 else 0.0 for m in month_keys}
+    p_g_cnt = sum(g_resurg_cnt.values())
+    p_g_pct = round(p_g_cnt / pooled_surg * 100, 2) if pooled_surg > 0 else 0.0
+
+    t4_rows.append({
+        "Procedure Category": "Total Graft Resurgeries (11–45 Days)",
+        m1: f"{g_resurg_cnt[m1]} ({g_resurg_pct[m1]}%)",
+        m2: f"{g_resurg_cnt[m2]} ({g_resurg_pct[m2]}%)",
+        m3: f"{g_resurg_cnt[m3]} ({g_resurg_pct[m3]}%)",
+        "3-Month Total": f"{p_g_cnt} ({p_g_pct}%)",
+        "Trend (M3 vs M1)": f"{g_resurg_pct[m3] - g_resurg_pct[m1]:+.2f}%"
+    })
+
+    for cat in graft_cats:
+        r = {"Procedure Category": f"  • {cat}"}
+        p_cnt = 0
+        for m in month_keys:
+            reps = month_results[m]["repeat_1m"]
+            cnt = (reps["Repeat_Category"] == cat).sum()
+            pct = round(cnt / tot_surg[m] * 100, 2) if tot_surg[m] > 0 else 0.0
+            r[m] = f"{cnt} ({pct}%)"
+            p_cnt += cnt
+        r["3-Month Total"] = f"{p_cnt} ({round(p_cnt / pooled_surg * 100, 2)}%)"
+        m1_cnt = (month_results[m1]["repeat_1m"]["Repeat_Category"] == cat).sum()
+        m3_cnt = (month_results[m3]["repeat_1m"]["Repeat_Category"] == cat).sum()
+        r["Trend (M3 vs M1)"] = f"{m3_cnt - m1_cnt:+d}"
+        t4_rows.append(r)
+
+    # Section 3: Supportive & Minor Interventions (Transparent Breakdown)
+    supp_cats = [
+        "IOAB / Antibiotic Injection",
+        "EUA / Examination",
+        "Tarsorrhaphy / Surface Protection",
+        "AC Wash / Reformation",
+        "Vitreoretinal Procedure",
+        "Other Minor Procedures"
+    ]
+
+    t4_rows.append({
+        "Procedure Category": "Supportive / In-Clinic Post-Op Interventions (11–45 Days)",
+        m1: f"---", m2: f"---", m3: f"---", "3-Month Total": f"---", "Trend (M3 vs M1)": f"---"
+    })
+
+    for cat in supp_cats:
+        r = {"Procedure Category": f"  • {cat}"}
+        p_cnt = 0
+        for m in month_keys:
+            reps = month_results[m]["repeat_1m"]
+            cnt = (reps["Repeat_Category"] == cat).sum()
+            pct = round(cnt / tot_surg[m] * 100, 2) if tot_surg[m] > 0 else 0.0
+            r[m] = f"{cnt} ({pct}%)"
+            p_cnt += cnt
+        r["3-Month Total"] = f"{p_cnt} ({round(p_cnt / pooled_surg * 100, 2)}%)"
+        m1_cnt = (month_results[m1]["repeat_1m"]["Repeat_Category"] == cat).sum()
+        m3_cnt = (month_results[m3]["repeat_1m"]["Repeat_Category"] == cat).sum()
+        r["Trend (M3 vs M1)"] = f"{m3_cnt - m1_cnt:+d}"
+        t4_rows.append(r)
+
+    # Section 4: All Re-interventions Combined
+    all_re_cnt = {m: len(month_results[m]["repeat_1m"]) for m in month_keys}
+    p_all_re = sum(all_re_cnt.values())
+    t4_rows.append({
+        "Procedure Category": "Total Combined Re-interventions (All Procedures)",
+        m1: f"{all_re_cnt[m1]} ({round(all_re_cnt[m1]/tot_surg[m1]*100, 2)}%)",
+        m2: f"{all_re_cnt[m2]} ({round(all_re_cnt[m2]/tot_surg[m2]*100, 2)}%)",
+        m3: f"{all_re_cnt[m3]} ({round(all_re_cnt[m3]/tot_surg[m3]*100, 2)}%)",
+        "3-Month Total": f"{p_all_re} ({round(p_all_re/pooled_surg*100, 2)}%)",
+        "Trend (M3 vs M1)": f"{all_re_cnt[m3] - all_re_cnt[m1]:+d}"
+    })
+
+    df_rep_overall = pd.DataFrame(t4_rows)
+
+    # ─────────────────────────────────────────────────────────────
+    # Helper for Grouped Resurgery Trend (11–45 Days)
+    # ─────────────────────────────────────────────────────────────
+    def _grouped_resurgery_trend(group_col: str, group_label: str) -> pd.DataFrame:
+        groups = sorted(comb_surg[group_col].dropna().unique())
+        rows = []
+        for g in groups:
+            r = {group_label: g}
+            g_pooled_surg = 0
+            g_pooled_resurg = 0
+            for m in month_keys:
+                msurg = month_results[m]["surgery_df"]
+                sub = msurg[msurg[group_col] == g]
+                s_cnt = len(sub)
+                r_cnt = sub["has_graft_resurgery_1m"].sum() if s_cnt > 0 else 0
+                pct = round(r_cnt / s_cnt * 100, 2) if s_cnt > 0 else 0.0
+                r[f"{m} Surgeries"] = s_cnt
+                r[f"{m} Graft Resurg % (11–45d)"] = pct
+                g_pooled_surg += s_cnt
+                g_pooled_resurg += r_cnt
+
+            p_pct = round(g_pooled_resurg / g_pooled_surg * 100, 2) if g_pooled_surg > 0 else 0.0
+            r["3-Month Surgeries"] = g_pooled_surg
+            r["3-Month Graft Resurg % (11–45d)"] = p_pct
+            r["Trend (M3 vs M1)"] = round(r[f"{m3} Graft Resurg % (11–45d)"] - r[f"{m1} Graft Resurg % (11–45d)"], 2)
+            rows.append(r)
+        return pd.DataFrame(rows)
+
+    df_rep_campus = _grouped_resurgery_trend("sap_code", "Campus")
+    df_rep_surg = _grouped_resurgery_trend("surg_proc_group", "Surgery Procedure")
+
+    return {
+        "1_Trend_Adherence_Overall": df_adh_overall,
+        "2_Trend_Adherence_Campus": df_adh_campus,
+        "3_Trend_Adherence_SurgType": df_adh_surg,
+        "4_Trend_Resurgery_Overall": df_rep_overall,
+        "5_Trend_Resurgery_Campus": df_rep_campus,
+        "6_Trend_Resurgery_SurgType": df_rep_surg,
+    }
+
+
+def create_trend_excel(trend_tables: dict[str, pd.DataFrame]) -> io.BytesIO:
+    """Creates an executive formatted openpyxl workbook with all 6 trend sheets."""
+    output = io.BytesIO()
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+
+    HEADER_FILL = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+    SUBHEADER_FILL = PatternFill(start_color="2F5597", end_color="2F5597", fill_type="solid")
+    HEADER_FONT = Font(name="Segoe UI", size=11, bold=True, color="FFFFFF")
+    DATA_FONT = Font(name="Segoe UI", size=10, bold=False, color="000000")
+    BOLD_FONT = Font(name="Segoe UI", size=10, bold=True, color="000000")
+    TOTAL_ROW_FILL = PatternFill(start_color="EBF1F5", end_color="EBF1F5", fill_type="solid")
+    ALT_ROW_FILL = PatternFill(start_color="F8F9FA", end_color="F8F9FA", fill_type="solid")
+    WHITE_ROW_FILL = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
+
+    THIN_SIDE = Side(border_style="thin", color="D9D9D9")
+    MEDIUM_BOTTOM = Side(border_style="medium", color="1F4E78")
+    DOUBLE_BOTTOM = Side(border_style="double", color="1F4E78")
+
+    DATA_BORDER = Border(left=THIN_SIDE, right=THIN_SIDE, top=THIN_SIDE, bottom=THIN_SIDE)
+    HEADER_BORDER = Border(left=THIN_SIDE, right=THIN_SIDE, top=THIN_SIDE, bottom=MEDIUM_BOTTOM)
+    TOTAL_BORDER = Border(left=THIN_SIDE, right=THIN_SIDE, top=THIN_SIDE, bottom=DOUBLE_BOTTOM)
+
+    TAB_COLORS = {
+        "1": "2B579A", "2": "27AE60", "3": "D35400",
+        "4": "C0392B", "5": "8E44AD", "6": "2980B9"
+    }
+
+    for sheet_name, df in trend_tables.items():
+        ws = wb.create_sheet(title=sheet_name[:31])
+        prefix = sheet_name.split("_")[0]
+        if prefix in TAB_COLORS:
+            ws.sheet_properties.tabColor = TAB_COLORS[prefix]
+        ws.views.sheetView[0].showGridLines = True
+        ws.freeze_panes = 'A3'
+
+        # Row 1: Note Banner explaining 1M window
+        headers = list(df.columns)
+        n_cols = len(headers)
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=n_cols)
+        note_cell = ws.cell(row=1, column=1, value="Note: 1-Month Follow-Up and Resurgery metrics are evaluated strictly between 11 and 45 days post-surgery.")
+        note_cell.font = Font(name="Segoe UI", size=9, italic=True, color="555555")
+        note_cell.alignment = Alignment(horizontal="left", vertical="center")
+        ws.row_dimensions[1].height = 18
+
+        # Row 2: Headers
+        for col_idx, h in enumerate(headers, 1):
+            cell = ws.cell(row=2, column=col_idx, value=h)
+            cell.fill = HEADER_FILL
+            cell.font = HEADER_FONT
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            cell.border = HEADER_BORDER
+        ws.row_dimensions[2].height = 28
+
+        # Data rows starting at row 3
+        for row_idx, row_data in enumerate(df.itertuples(index=False), 3):
+            ws.row_dimensions[row_idx].height = 20
+            first_val = str(row_data[0] or "").lower()
+            is_total = "total" in first_val or "overall" in first_val or "combined" in first_val
+            is_section_header = "---" in str(row_data[1] or "")
+            
+            if is_section_header:
+                r_fill = SUBHEADER_FILL
+                r_font = Font(name="Segoe UI", size=10, bold=True, color="FFFFFF")
+            elif is_total:
+                r_fill = TOTAL_ROW_FILL
+                r_font = BOLD_FONT
+            elif row_idx % 2 == 0:
+                r_fill = ALT_ROW_FILL
+                r_font = DATA_FONT
+            else:
+                r_fill = WHITE_ROW_FILL
+                r_font = DATA_FONT
+
+            r_border = TOTAL_BORDER if is_total else DATA_BORDER
+
+            for col_idx, val in enumerate(row_data, 1):
+                cell = ws.cell(row=row_idx, column=col_idx, value=val)
+                cell.fill = r_fill
+                cell.font = r_font
+                cell.border = r_border
+                h_name = headers[col_idx - 1]
+
+                if "%" in h_name or "rate" in h_name.lower():
+                    cell.alignment = Alignment(horizontal="right", vertical="center")
+                    if isinstance(val, (int, float)):
+                        cell.number_format = '0.00"%"'
+                elif any(k in h_name for k in ["Count", "Surgeries", "Total"]) and "rate" not in h_name.lower():
+                    cell.alignment = Alignment(horizontal="right", vertical="center")
+                    if isinstance(val, (int, float)):
+                        cell.number_format = '#,##0'
+                elif "trend" in h_name.lower() or "δ" in h_name.lower():
+                    cell.alignment = Alignment(horizontal="right", vertical="center")
+                    if isinstance(val, (int, float)):
+                        cell.number_format = '+0.00"%";-0.00"%";0.00"%"'
+                else:
+                    cell.alignment = Alignment(horizontal="left", vertical="center")
+
+        # Column widths
+        for col_idx in range(1, len(headers) + 1):
+            col_letter = get_column_letter(col_idx)
+            max_len = max(len(str(ws.cell(row=r, column=col_idx).value or '')) for r in range(2, ws.max_row + 1))
+            h_len = len(headers[col_idx - 1])
+            ws.column_dimensions[col_letter].width = min(max(max_len + 4, h_len + 4, 12), 40)
+
+    wb.save(output)
+    output.seek(0)
+    return output
+
+
+def _style_pptx_slide_header(slide, title_text: str, subtitle_text: str = "Evaluation Criteria: 1-Month Follow-Up & Resurgeries strictly between 11 and 45 Days Post-Surgery"):
+    """Adds a standard executive header banner to a PowerPoint slide."""
+    header_box = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0), Inches(0), Inches(13.333), Inches(1.1))
+    header_box.fill.solid()
+    header_box.fill.fore_color.rgb = RGBColor(31, 78, 120)  # Navy Blue
+    header_box.line.fill.background()
+
+    tf = header_box.text_frame
+    tf.word_wrap = True
+    tf.margin_left = Inches(0.5)
+    tf.margin_top = Inches(0.12)
+
+    p1 = tf.paragraphs[0]
+    p1.text = title_text
+    p1.font.size = Pt(20)
+    p1.font.bold = True
+    p1.font.color.rgb = RGBColor(255, 255, 255)
+
+    p2 = tf.add_paragraph()
+    p2.text = f"Criteria: {subtitle_text}"
+    p2.font.size = Pt(10)
+    p2.font.italic = True
+    p2.font.color.rgb = RGBColor(210, 230, 250)
+
+
+def _add_kpi_card(slide, left, top, width, height, title: str, value: str, subtext: str, border_color: RGBColor):
+    """Draws an executive KPI card on a PowerPoint slide."""
+    card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, left, top, width, height)
+    card.fill.solid()
+    card.fill.fore_color.rgb = RGBColor(255, 255, 255)
+    card.line.color.rgb = border_color
+    card.line.width = Pt(2)
+
+    tf = card.text_frame
+    tf.word_wrap = True
+    tf.margin_left = Inches(0.2)
+    tf.margin_right = Inches(0.2)
+    tf.margin_top = Inches(0.15)
+
+    p1 = tf.paragraphs[0]
+    p1.text = title.upper()
+    p1.font.size = Pt(9.5)
+    p1.font.bold = True
+    p1.font.color.rgb = RGBColor(100, 110, 120)
+
+    p2 = tf.add_paragraph()
+    p2.text = value
+    p2.font.size = Pt(22)
+    p2.font.bold = True
+    p2.font.color.rgb = border_color
+
+    p3 = tf.add_paragraph()
+    p3.text = subtext
+    p3.font.size = Pt(8.5)
+    p3.font.color.rgb = RGBColor(120, 130, 140)
+
+
+def create_trend_pptx(trend_tables: dict[str, pd.DataFrame], month_names: list[str]) -> io.BytesIO:
+    """
+    Renders an executive, widescreen (16:9) PowerPoint presentation (PPTX)
+    with high-resolution charts, KPI cards, and detailed resurgery breakdowns.
+    Explicitly highlights the 1-Month (11–45 Days) evaluation criteria across all slides.
+    """
+    prs = pptx.Presentation()
+    prs.slide_width = Inches(13.333)
+    prs.slide_height = Inches(7.5)
+    blank_layout = prs.slide_layouts[6]
+
+    m1, m2, m3 = month_names[0], month_names[1], month_names[2]
+    months = [m1, m2, m3]
+
+    c_blue = "#1F4E78"
+    c_green = "#27AE60"
+    c_red = "#C0392B"
+    c_purple = "#8E44AD"
+    c_gray = "#7F8C8D"
+
+    df_adh_ov = trend_tables["1_Trend_Adherence_Overall"]
+    df_adh_camp = trend_tables["2_Trend_Adherence_Campus"]
+    df_adh_surg = trend_tables["3_Trend_Adherence_SurgType"]
+    df_rep_ov = trend_tables["4_Trend_Resurgery_Overall"]
+    df_rep_camp = trend_tables["5_Trend_Resurgery_Campus"]
+    df_rep_surg = trend_tables["6_Trend_Resurgery_SurgType"]
+
+    # ─────────────────────────────────────────────────────────────
+    # SLIDE 1: Executive Title & 3-Month KPI Overview
+    # ─────────────────────────────────────────────────────────────
+    s1 = prs.slides.add_slide(blank_layout)
+    _style_pptx_slide_header(
+        s1,
+        "Corneal Transplantation Quality Trends | Multi-Month Executive Report",
+        "Clinical Window: 1-Month Follow-Up Adherence & Resurgeries strictly evaluated between 11 and 45 Days Post-Surgery"
+    )
+
+    # 4 KPI Cards across top
+    tot_surg_str = str(df_adh_ov.loc[df_adh_ov["Metric"] == "Total Primary Surgeries", "3-Month Total"].values[0])
+    adh_rate_str = str(df_adh_ov.loc[df_adh_ov["Metric"] == "1M Adherence Rate (11–45 Days) [%]", "3-Month Total"].values[0])
+    adh_delta_str = str(df_adh_ov.loc[df_adh_ov["Metric"] == "1M Adherence Rate (11–45 Days) [%]", "Trend (M3 - M1)"].values[0])
+
+    graft_resurg_val = str(df_rep_ov.loc[df_rep_ov["Procedure Category"] == "Total Graft Resurgeries (11–45 Days)", "3-Month Total"].values[0])
+    comb_resurg_val = str(df_rep_ov.loc[df_rep_ov["Procedure Category"] == "Total Combined Re-interventions (All Procedures)", "3-Month Total"].values[0])
+
+    card_w = Inches(2.8)
+    card_h = Inches(1.3)
+    top_pos = Inches(1.3)
+
+    _add_kpi_card(s1, Inches(0.6), top_pos, card_w, card_h, "3-Month Primary Surgeries", tot_surg_str, f"Across {m1}, {m2}, {m3}", RGBColor(31, 78, 120))
+    _add_kpi_card(s1, Inches(3.7), top_pos, card_w, card_h, "1M Adherence Rate (11–45d)", adh_rate_str, f"3-Month Pooled (Trend: {adh_delta_str})", RGBColor(39, 174, 96))
+    _add_kpi_card(s1, Inches(6.8), top_pos, card_w, card_h, "1M Graft Resurgery Rate", graft_resurg_val, "Rebubbling, Resuturing, KP", RGBColor(192, 57, 43))
+    _add_kpi_card(s1, Inches(9.9), top_pos, card_w, card_h, "All Re-interventions", comb_resurg_val, "Includes IOAB Injections & EUA", RGBColor(142, 68, 173))
+
+    # Dual Chart Overview (Adherence vs Graft Resurgery Rate)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11.5, 4.0), dpi=180)
+    adh_vals = [float(str(df_adh_ov.loc[df_adh_ov["Metric"] == "1M Adherence Rate (11–45 Days) [%]", m].values[0]).replace('%', '')) for m in months]
+    ax1.plot(months, adh_vals, marker='o', linewidth=3, markersize=8, color=c_green)
+    for i, v in enumerate(adh_vals):
+        ax1.annotate(f"{v:.1f}%", (months[i], v), textcoords="offset points", xytext=(0, 8), ha='center', fontweight='bold', fontsize=9, color=c_green)
+    ax1.set_title("1-Month Follow-Up Adherence Rate (%) [11–45 Days]", fontsize=11, fontweight='bold', color=c_blue)
+    ax1.set_ylabel("Adherence Rate (%)", fontsize=9)
+    ax1.set_ylim(0, 105)
+    ax1.grid(True, linestyle="--", alpha=0.4)
+
+    # Extract graft resurgery rate %
+    g_resurg_rates = []
+    for m in months:
+        val_str = str(df_rep_ov.loc[df_rep_ov["Procedure Category"] == "Total Graft Resurgeries (11–45 Days)", m].values[0])
+        match = re.search(r'\(([\d.]+)%\)', val_str)
+        g_resurg_rates.append(float(match.group(1)) if match else 0.0)
+
+    ax2.plot(months, g_resurg_rates, marker='s', linewidth=3, markersize=8, color=c_red)
+    for i, v in enumerate(g_resurg_rates):
+        ax2.annotate(f"{v:.2f}%", (months[i], v), textcoords="offset points", xytext=(0, 8), ha='center', fontweight='bold', fontsize=9, color=c_red)
+    ax2.set_title("1-Month Graft Resurgery Rate (%) [11–45 Days]", fontsize=11, fontweight='bold', color=c_blue)
+    ax2.set_ylabel("Graft Resurgery Rate (%)", fontsize=9)
+    ax2.set_ylim(0, max(g_resurg_rates + [5]) * 1.35)
+    ax2.grid(True, linestyle="--", alpha=0.4)
+
+    plt.tight_layout()
+    img_buf = io.BytesIO()
+    plt.savefig(img_buf, format='png', dpi=180)
+    plt.close(fig)
+    img_buf.seek(0)
+    s1.shapes.add_picture(img_buf, Inches(0.6), Inches(2.8), Inches(12.1), Inches(4.3))
+
+    # ─────────────────────────────────────────────────────────────
+    # SLIDE 2: 1-Month Follow-Up Adherence (11–45 Days) — Campus Trends
+    # ─────────────────────────────────────────────────────────────
+    s2 = prs.slides.add_slide(blank_layout)
+    _style_pptx_slide_header(s2, "1-Month Follow-Up Adherence Rate by Campus (11–45 Days Post-Surgery)")
+
+    fig, ax = plt.subplots(figsize=(11.5, 5.2), dpi=180)
+    campuses = df_adh_camp["Campus"].tolist()
+    x = np.arange(len(campuses))
+    width = 0.25
+
+    colors = [c_blue, c_green, c_purple]
+    for idx, m in enumerate(months):
+        rates = df_adh_camp[f"{m} Adherent % (11–45d)"].tolist()
+        bars = ax.bar(x + (idx - 1) * width, rates, width, label=m, color=colors[idx % len(colors)], alpha=0.85)
+        for bar in bars:
+            h = bar.get_height()
+            if h > 0:
+                ax.annotate(f"{h:.1f}%", xy=(bar.get_x() + bar.get_width() / 2, h), xytext=(0, 3), textcoords="offset points", ha='center', va='bottom', fontsize=8, fontweight='bold')
+
+    ax.set_title("Campus Adherence Rate Trend across 3 Months (Window: 11–45 Days)", fontsize=13, fontweight='bold', color=c_blue, pad=12)
+    ax.set_xticks(x)
+    ax.set_xticklabels(campuses, fontsize=10, fontweight='bold')
+    ax.set_ylabel("Adherence Rate (%)", fontsize=10)
+    ax.set_ylim(0, 115)
+    ax.legend(frameon=True, facecolor="#F8F9FA", loc="upper right")
+    ax.grid(True, axis='y', linestyle="--", alpha=0.4)
+
+    plt.tight_layout()
+    img_buf = io.BytesIO()
+    plt.savefig(img_buf, format='png', dpi=180)
+    plt.close(fig)
+    img_buf.seek(0)
+    s2.shapes.add_picture(img_buf, Inches(0.8), Inches(1.4), Inches(11.7), Inches(5.6))
+
+    # ─────────────────────────────────────────────────────────────
+    # SLIDE 3: 1-Month Follow-Up Adherence (11–45 Days) by Surgery Procedure
+    # ─────────────────────────────────────────────────────────────
+    s3 = prs.slides.add_slide(blank_layout)
+    _style_pptx_slide_header(s3, "1-Month Follow-Up Adherence by Surgical Procedure (11–45 Days Post-Surgery)")
+
+    fig, ax = plt.subplots(figsize=(11.5, 5.2), dpi=180)
+    procs = df_adh_surg["Surgery Procedure"].tolist()
+    x = np.arange(len(procs))
+    width = 0.25
+
+    for idx, m in enumerate(months):
+        rates = df_adh_surg[f"{m} Adherent % (11–45d)"].tolist()
+        bars = ax.bar(x + (idx - 1) * width, rates, width, label=m, color=colors[idx % len(colors)], alpha=0.85)
+        for bar in bars:
+            h = bar.get_height()
+            if h > 0:
+                ax.annotate(f"{h:.1f}%", xy=(bar.get_x() + bar.get_width() / 2, h), xytext=(0, 3), textcoords="offset points", ha='center', va='bottom', fontsize=8, fontweight='bold')
+
+    ax.set_title("Surgery Procedure Adherence Comparison (Window: 11–45 Days)", fontsize=13, fontweight='bold', color=c_blue, pad=12)
+    ax.set_xticks(x)
+    ax.set_xticklabels(procs, fontsize=9.5, fontweight='bold', rotation=15)
+    ax.set_ylabel("Adherence Rate (%)", fontsize=10)
+    ax.set_ylim(0, 115)
+    ax.legend(frameon=True, facecolor="#F8F9FA", loc="upper right")
+    ax.grid(True, axis='y', linestyle="--", alpha=0.4)
+
+    plt.tight_layout()
+    img_buf = io.BytesIO()
+    plt.savefig(img_buf, format='png', dpi=180)
+    plt.close(fig)
+    img_buf.seek(0)
+    s3.shapes.add_picture(img_buf, Inches(0.8), Inches(1.4), Inches(11.7), Inches(5.6))
+
+    # ─────────────────────────────────────────────────────────────
+    # SLIDE 4: 1-Month Graft Resurgery Rate (11–45 Days) — Campus Trends
+    # ─────────────────────────────────────────────────────────────
+    s4 = prs.slides.add_slide(blank_layout)
+    _style_pptx_slide_header(
+        s4,
+        "1-Month Graft Resurgery Rate by Campus (11–45 Days Post-Surgery)",
+        "Graft-Specific Resurgeries: Rebubbling / Descematopexy, Wound Resuturing, and Repeat Keratoplasty (KP)"
+    )
+
+    fig, ax = plt.subplots(figsize=(11.5, 5.2), dpi=180)
+    campuses_rep = df_rep_camp["Campus"].tolist()
+    x = np.arange(len(campuses_rep))
+    width = 0.25
+
+    for idx, m in enumerate(months):
+        rates = df_rep_camp[f"{m} Graft Resurg % (11–45d)"].tolist()
+        bars = ax.bar(x + (idx - 1) * width, rates, width, label=m, color=colors[idx % len(colors)], alpha=0.85)
+        for bar in bars:
+            h = bar.get_height()
+            if h > 0:
+                ax.annotate(f"{h:.1f}%", xy=(bar.get_x() + bar.get_width() / 2, h), xytext=(0, 3), textcoords="offset points", ha='center', va='bottom', fontsize=8.5, fontweight='bold')
+
+    ax.set_title("Graft Resurgery Rate by Campus across 3 Months (Window: 11–45 Days)", fontsize=13, fontweight='bold', color=c_blue, pad=12)
+    ax.set_xticks(x)
+    ax.set_xticklabels(campuses_rep, fontsize=10, fontweight='bold')
+    ax.set_ylabel("Graft Resurgery Rate (%)", fontsize=10)
+    ax.set_ylim(0, max([bar.get_height() for bar in ax.patches] + [6]) * 1.3)
+    ax.legend(frameon=True, facecolor="#F8F9FA", loc="upper right")
+    ax.grid(True, axis='y', linestyle="--", alpha=0.4)
+
+    plt.tight_layout()
+    img_buf = io.BytesIO()
+    plt.savefig(img_buf, format='png', dpi=180)
+    plt.close(fig)
+    img_buf.seek(0)
+    s4.shapes.add_picture(img_buf, Inches(0.8), Inches(1.4), Inches(11.7), Inches(5.6))
+
+    # ─────────────────────────────────────────────────────────────
+    # SLIDE 5: Resurgery & Re-intervention Breakdown (11–45 Days)
+    # ─────────────────────────────────────────────────────────────
+    s5 = prs.slides.add_slide(blank_layout)
+    _style_pptx_slide_header(
+        s5,
+        "Resurgery & Re-intervention Clinical Categorization Breakdown (11–45 Days)",
+        "True Graft Resurgeries vs. Supportive / In-Clinic Interventions (IOAB Injections, EUA, Tarsorrhaphy)"
+    )
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11.5, 4.8), dpi=180)
+    
+    # Left: Graft Resurgery Breakdown
+    graft_labels = ["Rebubbling", "Wound Resuturing", "Repeat KP"]
+    graft_keys = ["Rebubbling / Descematopexy", "Wound Resuturing", "Repeat Keratoplasty (KP)"]
+    x1 = np.arange(len(graft_labels))
+    width = 0.25
+
+    for idx, m in enumerate(months):
+        cnts = []
+        for gk in graft_keys:
+            val_str = str(df_rep_ov.loc[df_rep_ov["Procedure Category"] == f"  • {gk}", m].values[0])
+            m_cnt = int(re.match(r'(\d+)', val_str).group(1)) if re.match(r'(\d+)', val_str) else 0
+            cnts.append(m_cnt)
+        bars = ax1.bar(x1 + (idx - 1) * width, cnts, width, label=m, color=colors[idx % len(colors)], alpha=0.85)
+        for bar in bars:
+            h = bar.get_height()
+            if h > 0:
+                ax1.annotate(f"{int(h)}", xy=(bar.get_x() + bar.get_width() / 2, h), xytext=(0, 3), textcoords="offset points", ha='center', va='bottom', fontsize=8.5, fontweight='bold')
+
+    ax1.set_title("Graft-Specific Resurgeries (True Re-operations)", fontsize=11, fontweight='bold', color=c_blue)
+    ax1.set_xticks(x1)
+    ax1.set_xticklabels(graft_labels, fontsize=9.5, fontweight='bold')
+    ax1.set_ylabel("Number of Procedures", fontsize=9)
+    ax1.legend(frameon=True, facecolor="#F8F9FA")
+    ax1.grid(True, axis='y', linestyle="--", alpha=0.4)
+
+    # Right: Supportive Interventions Breakdown
+    supp_labels = ["IOAB / Injections", "EUA / Exam", "Tarsorrhaphy", "AC Wash/Ref"]
+    supp_keys = ["IOAB / Antibiotic Injection", "EUA / Examination", "Tarsorrhaphy / Surface Protection", "AC Wash / Reformation"]
+    x2 = np.arange(len(supp_labels))
+
+    for idx, m in enumerate(months):
+        cnts = []
+        for sk in supp_keys:
+            val_str = str(df_rep_ov.loc[df_rep_ov["Procedure Category"] == f"  • {sk}", m].values[0])
+            m_cnt = int(re.match(r'(\d+)', val_str).group(1)) if re.match(r'(\d+)', val_str) else 0
+            cnts.append(m_cnt)
+        bars = ax2.bar(x2 + (idx - 1) * width, cnts, width, label=m, color=colors[idx % len(colors)], alpha=0.85)
+        for bar in bars:
+            h = bar.get_height()
+            if h > 0:
+                ax2.annotate(f"{int(h)}", xy=(bar.get_x() + bar.get_width() / 2, h), xytext=(0, 3), textcoords="offset points", ha='center', va='bottom', fontsize=8.5, fontweight='bold')
+
+    ax2.set_title("Supportive & In-Clinic Post-Op Interventions", fontsize=11, fontweight='bold', color=c_blue)
+    ax2.set_xticks(x2)
+    ax2.set_xticklabels(supp_labels, fontsize=9.5, fontweight='bold')
+    ax2.set_ylabel("Number of Procedures", fontsize=9)
+    ax2.legend(frameon=True, facecolor="#F8F9FA")
+    ax2.grid(True, axis='y', linestyle="--", alpha=0.4)
+
+    plt.tight_layout()
+    img_buf = io.BytesIO()
+    plt.savefig(img_buf, format='png', dpi=180)
+    plt.close(fig)
+    img_buf.seek(0)
+    s5.shapes.add_picture(img_buf, Inches(0.8), Inches(1.4), Inches(11.7), Inches(5.6))
+
+    # ─────────────────────────────────────────────────────────────
+    # SLIDE 6: Resurgery Rate by Primary Surgery & Executive Matrix
+    # ─────────────────────────────────────────────────────────────
+    s6 = prs.slides.add_slide(blank_layout)
+    _style_pptx_slide_header(
+        s6,
+        "Graft Resurgery Rate by Primary Surgical Procedure (11–45 Days Post-Surgery)",
+        "Summary Scorecard & Surgical Procedure Risk Distribution"
+    )
+
+    fig, ax = plt.subplots(figsize=(11.5, 5.2), dpi=180)
+    procs_rep = df_rep_surg["Surgery Procedure"].tolist()
+    x = np.arange(len(procs_rep))
+    width = 0.25
+
+    for idx, m in enumerate(months):
+        rates = df_rep_surg[f"{m} Graft Resurg % (11–45d)"].tolist()
+        bars = ax.bar(x + (idx - 1) * width, rates, width, label=m, color=colors[idx % len(colors)], alpha=0.85)
+        for bar in bars:
+            h = bar.get_height()
+            if h > 0:
+                ax.annotate(f"{h:.1f}%", xy=(bar.get_x() + bar.get_width() / 2, h), xytext=(0, 3), textcoords="offset points", ha='center', va='bottom', fontsize=8, fontweight='bold')
+
+    ax.set_title("Graft Resurgery Rate by Procedure Group across 3 Months (Window: 11–45 Days)", fontsize=13, fontweight='bold', color=c_blue, pad=12)
+    ax.set_xticks(x)
+    ax.set_xticklabels(procs_rep, fontsize=9.5, fontweight='bold', rotation=15)
+    ax.set_ylabel("Graft Resurgery Rate (%)", fontsize=10)
+    ax.set_ylim(0, max([bar.get_height() for bar in ax.patches] + [6]) * 1.3)
+    ax.legend(frameon=True, facecolor="#F8F9FA", loc="upper right")
+    ax.grid(True, axis='y', linestyle="--", alpha=0.4)
+
+    plt.tight_layout()
+    img_buf = io.BytesIO()
+    plt.savefig(img_buf, format='png', dpi=180)
+    plt.close(fig)
+    img_buf.seek(0)
+    s6.shapes.add_picture(img_buf, Inches(0.8), Inches(1.4), Inches(11.7), Inches(5.6))
+
+    output = io.BytesIO()
+    prs.save(output)
+    output.seek(0)
+    return output
+
+
+def create_trend_pdf(trend_tables: dict[str, pd.DataFrame], month_names: list[str]) -> io.BytesIO:
+    """
+    Renders a multi-page PDF report containing high-resolution charts
+    with explicit 1-Month (11–45 Days) labeling.
+    (Kept for backward compatibility; PPTX is the primary deliverable).
+    """
+    pdf_buffer = io.BytesIO()
+    m1, m2, m3 = month_names[0], month_names[1], month_names[2]
+    months = [m1, m2, m3]
+
+    c_blue = "#1F4E78"
+    c_green = "#27AE60"
+    c_red = "#C0392B"
+    colors = [c_blue, c_green, "#8E44AD"]
+
+    with PdfPages(pdf_buffer) as pdf:
+        # Page 1: Overview
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11.69, 8.27), dpi=150)
+        fig.suptitle("3-Month Clinical Quality Trends (1-Month Window: 11–45 Days Post-Surgery)", fontsize=15, fontweight='bold', color=c_blue, y=0.96)
+
+        df_adh = trend_tables["1_Trend_Adherence_Overall"]
+        adh_rates = [
+            float(str(df_adh.loc[df_adh["Metric"] == "1M Adherence Rate (11–45 Days) [%]", m].values[0]).replace('%', ''))
+            for m in months
+        ]
+        ax1.plot(months, adh_rates, marker='o', linewidth=3, markersize=9, color=c_green)
+        for i, val in enumerate(adh_rates):
+            ax1.annotate(f"{val:.1f}%", (months[i], val), textcoords="offset points", xytext=(0, 10), ha='center', fontweight='bold', fontsize=11, color=c_green)
+        ax1.set_title("1-Month Follow-Up Adherence Rate (11–45 Days)", fontsize=12, fontweight='bold', pad=12)
+        ax1.set_ylabel("Adherence Rate (%)", fontsize=10)
+        ax1.set_ylim(0, 105)
+        ax1.grid(True, linestyle="--", alpha=0.5)
+
+        df_rep = trend_tables["4_Trend_Resurgery_Overall"]
+        g_resurg_rates = []
+        for m in months:
+            val_str = str(df_rep.loc[df_rep["Procedure Category"] == "Total Graft Resurgeries (11–45 Days)", m].values[0])
+            match = re.search(r'\(([\d.]+)%\)', val_str)
+            g_resurg_rates.append(float(match.group(1)) if match else 0.0)
+
+        ax2.plot(months, g_resurg_rates, marker='s', linewidth=3, markersize=9, color=c_red)
+        for i, val in enumerate(g_resurg_rates):
+            ax2.annotate(f"{val:.2f}%", (months[i], val), textcoords="offset points", xytext=(0, 10), ha='center', fontweight='bold', fontsize=11, color=c_red)
+        ax2.set_title("1-Month Graft Resurgery Rate (11–45 Days)", fontsize=12, fontweight='bold', pad=12)
+        ax2.set_ylabel("Graft Resurgery Rate (%)", fontsize=10)
+        ax2.set_ylim(0, max(g_resurg_rates + [5]) * 1.35)
+        ax2.grid(True, linestyle="--", alpha=0.5)
+
+        plt.tight_layout(rect=[0.05, 0.08, 0.95, 0.92])
+        pdf.savefig(fig)
+        plt.close(fig)
+
+    pdf_buffer.seek(0)
+    return pdf_buffer
+
+
 def fix_date(df: pd.DataFrame, column: str) -> pd.DataFrame:
     if column not in df.columns:
         return df
@@ -736,7 +1696,10 @@ def run_analysis_pipeline(df_raw: pd.DataFrame):
         (visit_df_primary["advise_surg"] == "YES") &
         (visit_df_primary["fup_surg_done"] == "YES")
     ].copy()
-    repeat_df["Repeat_Category"] = repeat_df["fup_done_surg_proc"].apply(categorize_repeat_surgery)
+    repeat_df["Repeat_Category"] = repeat_df.apply(
+        lambda row: categorize_repeat_surgery(row.get("fup_done_surg_proc"), row.get("adv_surg_proc"))[0],
+        axis=1
+    )
 
     overall_repeat = (
         repeat_df["Repeat_Category"].value_counts()
@@ -757,7 +1720,7 @@ def run_analysis_pipeline(df_raw: pd.DataFrame):
         repeat_summary["Repeat %"] = (repeat_summary["Overall"] / repeat_summary["Total Primary"] * 100).round(2)
 
     kp_details = (
-        repeat_df[repeat_df["Repeat_Category"] == "KP"]
+        repeat_df[repeat_df["Repeat_Category"] == "Repeat Keratoplasty (KP)"]
         .groupby(["surg_proc_group", "fup_done_surg_proc"]).size()
         .reset_index(name="Count")
         .sort_values(["surg_proc_group", "Count"], ascending=[True, False])
@@ -765,7 +1728,7 @@ def run_analysis_pipeline(df_raw: pd.DataFrame):
 
     kp_cols = [c for c in ["tp_mrno_corrected", "id", "surg_proc_group", "fup_done_surg_proc", "days_after_surgery", "visit_date"] if c in repeat_df.columns]
     kp_patients = (
-        repeat_df[repeat_df["Repeat_Category"] == "KP"]
+        repeat_df[repeat_df["Repeat_Category"] == "Repeat Keratoplasty (KP)"]
         [kp_cols]
         .sort_values(["surg_proc_group", "fup_done_surg_proc", "tp_mrno_corrected"])
     )
@@ -1091,7 +2054,7 @@ else:
         
         **Outputs Generated:**
         - 📥 **Executive Excel Workbook** (`3_Month_Trends_Results.xlsx`) with 6 formatted trend sheets.
-        - 📄 **Executive PDF Charts Report** (`3_Month_Trends_Report.pdf`) with all high-resolution trend charts.
+        - 📊 **Executive PowerPoint Presentation** (`3_Month_Trends_Report.pptx`) with all high-resolution trend charts.
         """)
     else:
         m_labels = [extract_month_label(f.name, idx + 1) for idx, f in enumerate(uploaded_files)]
@@ -1117,7 +2080,7 @@ else:
 
                 trend_tables = build_3month_trend_tables(month_results)
                 trend_excel_bytes = create_trend_excel(trend_tables)
-                trend_pdf_bytes = create_trend_pdf(trend_tables, active_labels)
+                trend_pptx_bytes = create_trend_pptx(trend_tables, active_labels)
                 st.success("✓ 3-Month Trend Analysis complete! All trend tables, charts, and reports generated.")
             except Exception as e:
                 st.error(f"❌ Error processing trend data: {e}")
@@ -1160,11 +2123,11 @@ else:
             )
         with d_col2:
             st.download_button(
-                label="📄 Download Executive Trend PDF Charts Report",
-                data=trend_pdf_bytes,
-                file_name=f"3_Month_Trends_Report_{datetime.now().strftime('%b%Y')}.pdf",
-                mime="application/pdf",
-                help="Multi-page PDF document containing all high-resolution trend charts."
+                label="📊 Download Executive Trend PowerPoint (PPTX)",
+                data=trend_pptx_bytes,
+                file_name=f"3_Month_Trends_Report_{datetime.now().strftime('%b%Y')}.pptx",
+                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                help="Executive 16:9 widescreen PowerPoint presentation containing trend charts and clinical breakdowns."
             )
 
         st.markdown("---")
