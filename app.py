@@ -20,6 +20,8 @@ except Exception:
 
 import numpy as np
 import openpyxl
+from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 import pandas as pd
 import streamlit as st
 import matplotlib
@@ -161,63 +163,28 @@ def correct_mrno(mrno) -> str:
     return mrno_str
 
 
-def categorize_repeat_surgery(proc_name, adv_proc_name=None) -> tuple[str, bool]:
+def categorize_repeat_surgery(proc_name, adv_proc_name=None) -> str:
     """
-    Categorizes post-op re-interventions into clinical procedure groups.
-    Returns: (Category_Name, is_graft_resurgery: bool)
-    
-    True Graft-Specific Resurgeries (Graft Re-operations):
-      - Rebubbling / Descematopexy
-      - Wound Resuturing
-      - Repeat Keratoplasty (KP)
-      
-    Supportive / In-Clinic Interventions (Non-graft revisions):
-      - IOAB / Antibiotic Injections
-      - EUA / Examination Under Anesthesia
-      - Tarsorrhaphy / Surface Protection
-      - AC Wash / Reformation
-      - Vitreoretinal Procedures
-      - Other Minor Procedures
+    Categorizes post-op re-interventions into repeat surgery categories matching
+    morbidity_analysis_clean:
+      - REBUBBLING
+      - WOUND_RESUTURING
+      - KP (Repeat Keratoplasty procedures in REPEAT_KP_PROCS)
+      - Others (Minor procedures / supportive interventions)
+
+    Apart from Others, REBUBBLING, WOUND_RESUTURING, and KP are the real repeat surgeries.
     """
     name = proc_name if (pd.notna(proc_name) and str(proc_name).strip() != "") else adv_proc_name
-    if pd.isna(name) or not str(name).strip():
-        return ("Other Minor Procedures", False)
-
-    s = str(name).strip().upper()
-
-    # 1. Repeat Keratoplasty (Graft replacement)
-    if any(k in s for k in ['KERATOPLASTY', 'TH PK', 'DSAEK', 'DMEK', 'DALK']) or s == 'PENETRATING KERATOPLASTY (PK)':
-        return ("Repeat Keratoplasty (KP)", True)
-
-    # 2. Rebubbling & Descematopexy
-    if 'REBUBBLING' in s or 'DESCMETOPEXY' in s or 'DESCEMETOPE' in s:
-        return ("Rebubbling / Descematopexy", True)
-
-    # 3. Wound Resuturing (including compound procedures with resuturing)
-    if 'WOUND RESUTURING' in s or 'RESUTURING' in s:
-        return ("Wound Resuturing", True)
-
-    # 4. Antibiotic Injections (IOAB / Intracameral / Intrastromal)
-    if 'IOAB' in s or 'ANTIBIOTIC INJ' in s or 'INTRAOCULAR ANTIBIOTIC' in s:
-        return ("IOAB / Antibiotic Injection", False)
-
-    # 5. Examination Under Anesthesia / Microscope
-    if 'EXAMINATION UNDER' in s or 'EUA' in s or 'EUM' in s:
-        return ("EUA / Examination", False)
-
-    # 6. Surface Protection & Tarsorrhaphy
-    if 'TARSORRAPHY' in s or 'GLUE' in s or 'BCL' in s or 'AMNIOTIC' in s or 'TENONS PATCH' in s:
-        return ("Tarsorrhaphy / Surface Protection", False)
-
-    # 7. Anterior Chamber Interventions
-    if 'AC WASH' in s or 'AC REFORMATION' in s or 'AC TAP' in s:
-        return ("AC Wash / Reformation", False)
-
-    # 8. Vitreoretinal Procedures
-    if 'VITRECTOMY' in s or 'PPV' in s or 'VITREOUS' in s or 'SILICONE OIL' in s:
-        return ("Vitreoretinal Procedure", False)
-
-    return ("Other Minor Procedures", False)
+    if pd.isna(name):
+        return "Others"
+    s = str(name).strip()
+    if s == "REBUBBLING":
+        return "REBUBBLING"
+    if s in ("WOUND RESUTURING", "WOUND_RESUTURING"):
+        return "WOUND_RESUTURING"
+    if s in REPEAT_KP_PROCS:
+        return "KP"
+    return "Others"
 
 
 def load_and_clean_month_df(file_source) -> pd.DataFrame:
@@ -333,18 +300,20 @@ def process_single_month(df: pd.DataFrame) -> dict:
         (visit_df_primary['fup_surg_done'] == 'YES')
     ].copy()
 
-    # Categorize procedures
-    cats = [
+    # Categorize procedures matching morbidity analysis clean logic
+    repeat_1m['Repeat_Category'] = [
         categorize_repeat_surgery(row.get('fup_done_surg_proc'), row.get('adv_surg_proc'))
         for _, row in repeat_1m.iterrows()
     ]
-    repeat_1m['Repeat_Category'] = [c[0] for c in cats]
-    repeat_1m['is_graft_resurgery'] = [c[1] for c in cats]
+    # Real repeat surgeries are REBUBBLING, WOUND_RESUTURING, KP (apart from Others)
+    repeat_1m['is_real_repeat'] = repeat_1m['Repeat_Category'].isin(['REBUBBLING', 'WOUND_RESUTURING', 'KP'])
+    repeat_1m['is_graft_resurgery'] = repeat_1m['is_real_repeat']
 
-    # Tag primary surgeries that had true graft resurgeries vs any re-intervention
-    graft_resurg_ids = set(repeat_1m[repeat_1m['is_graft_resurgery']]['id'].unique())
+    # Tag primary surgeries that had real repeat surgeries vs any re-intervention (including Others)
+    real_resurg_ids = set(repeat_1m[repeat_1m['is_real_repeat']]['id'].unique())
     any_reintervention_ids = set(repeat_1m['id'].unique())
-    surgery_df['has_graft_resurgery_1m'] = surgery_df['id'].isin(graft_resurg_ids)
+    surgery_df['has_graft_resurgery_1m'] = surgery_df['id'].isin(real_resurg_ids)
+    surgery_df['has_repeat_surgery_1m'] = surgery_df['id'].isin(real_resurg_ids)
     surgery_df['has_any_reintervention_1m'] = surgery_df['id'].isin(any_reintervention_ids)
 
     return {
@@ -440,17 +409,17 @@ def build_3month_trend_tables(month_results: dict[str, dict]) -> dict[str, pd.Da
         "Trend (M3 vs M1)": tot_surg[m3] - tot_surg[m1]
     })
 
-    # Section 2: Graft-Specific Resurgeries (True Re-operations)
-    graft_cats = ["Rebubbling / Descematopexy", "Wound Resuturing", "Repeat Keratoplasty (KP)"]
+    # Section 2: Real Repeat Surgeries (REBUBBLING, WOUND_RESUTURING, KP)
+    real_cats = ["REBUBBLING", "WOUND_RESUTURING", "KP"]
     
-    # Total Graft Resurgeries
+    # Total Real Repeat Surgeries
     g_resurg_cnt = {m: month_results[m]["surgery_df"]["has_graft_resurgery_1m"].sum() for m in month_keys}
     g_resurg_pct = {m: round(g_resurg_cnt[m] / tot_surg[m] * 100, 2) if tot_surg[m] > 0 else 0.0 for m in month_keys}
     p_g_cnt = sum(g_resurg_cnt.values())
     p_g_pct = round(p_g_cnt / pooled_surg * 100, 2) if pooled_surg > 0 else 0.0
 
     t4_rows.append({
-        "Procedure Category": "Total Graft Resurgeries (11–45 Days)",
+        "Procedure Category": "Total Repeat Surgeries (Real: Rebubbling, Resuturing, KP) [11–45 Days]",
         m1: f"{g_resurg_cnt[m1]} ({g_resurg_pct[m1]}%)",
         m2: f"{g_resurg_cnt[m2]} ({g_resurg_pct[m2]}%)",
         m3: f"{g_resurg_cnt[m3]} ({g_resurg_pct[m3]}%)",
@@ -458,7 +427,7 @@ def build_3month_trend_tables(month_results: dict[str, dict]) -> dict[str, pd.Da
         "Trend (M3 vs M1)": f"{g_resurg_pct[m3] - g_resurg_pct[m1]:+.2f}%"
     })
 
-    for cat in graft_cats:
+    for cat in real_cats:
         r = {"Procedure Category": f"  • {cat}"}
         p_cnt = 0
         for m in month_keys:
@@ -473,37 +442,22 @@ def build_3month_trend_tables(month_results: dict[str, dict]) -> dict[str, pd.Da
         r["Trend (M3 vs M1)"] = f"{m3_cnt - m1_cnt:+d}"
         t4_rows.append(r)
 
-    # Section 3: Supportive & Minor Interventions (Transparent Breakdown)
-    supp_cats = [
-        "IOAB / Antibiotic Injection",
-        "EUA / Examination",
-        "Tarsorrhaphy / Surface Protection",
-        "AC Wash / Reformation",
-        "Vitreoretinal Procedure",
-        "Other Minor Procedures"
-    ]
+    # Section 3: Others (Minor Procedures)
+    r_oth = {"Procedure Category": "Others (Minor Procedures)"}
+    p_oth_cnt = 0
+    for m in month_keys:
+        reps = month_results[m]["repeat_1m"]
+        cnt = (reps["Repeat_Category"] == "Others").sum()
+        pct = round(cnt / tot_surg[m] * 100, 2) if tot_surg[m] > 0 else 0.0
+        r_oth[m] = f"{cnt} ({pct}%)"
+        p_oth_cnt += cnt
+    r_oth["3-Month Total"] = f"{p_oth_cnt} ({round(p_oth_cnt / pooled_surg * 100, 2)}%)"
+    m1_oth_cnt = (month_results[m1]["repeat_1m"]["Repeat_Category"] == "Others").sum()
+    m3_oth_cnt = (month_results[m3]["repeat_1m"]["Repeat_Category"] == "Others").sum()
+    r_oth["Trend (M3 vs M1)"] = f"{m3_oth_cnt - m1_oth_cnt:+d}"
+    t4_rows.append(r_oth)
 
-    t4_rows.append({
-        "Procedure Category": "Supportive / In-Clinic Post-Op Interventions (11–45 Days)",
-        m1: f"---", m2: f"---", m3: f"---", "3-Month Total": f"---", "Trend (M3 vs M1)": f"---"
-    })
-
-    for cat in supp_cats:
-        r = {"Procedure Category": f"  • {cat}"}
-        p_cnt = 0
-        for m in month_keys:
-            reps = month_results[m]["repeat_1m"]
-            cnt = (reps["Repeat_Category"] == cat).sum()
-            pct = round(cnt / tot_surg[m] * 100, 2) if tot_surg[m] > 0 else 0.0
-            r[m] = f"{cnt} ({pct}%)"
-            p_cnt += cnt
-        r["3-Month Total"] = f"{p_cnt} ({round(p_cnt / pooled_surg * 100, 2)}%)"
-        m1_cnt = (month_results[m1]["repeat_1m"]["Repeat_Category"] == cat).sum()
-        m3_cnt = (month_results[m3]["repeat_1m"]["Repeat_Category"] == cat).sum()
-        r["Trend (M3 vs M1)"] = f"{m3_cnt - m1_cnt:+d}"
-        t4_rows.append(r)
-
-    # Section 4: All Re-interventions Combined
+    # Section 4: All Re-interventions Combined (Real + Others)
     all_re_cnt = {m: len(month_results[m]["repeat_1m"]) for m in month_keys}
     p_all_re = sum(all_re_cnt.values())
     t4_rows.append({
@@ -535,13 +489,15 @@ def build_3month_trend_tables(month_results: dict[str, dict]) -> dict[str, pd.Da
                 pct = round(r_cnt / s_cnt * 100, 2) if s_cnt > 0 else 0.0
                 r[f"{m} Surgeries"] = s_cnt
                 r[f"{m} Graft Resurg % (11–45d)"] = pct
+                r[f"{m} Repeat Surg % (11–45d)"] = pct
                 g_pooled_surg += s_cnt
                 g_pooled_resurg += r_cnt
 
             p_pct = round(g_pooled_resurg / g_pooled_surg * 100, 2) if g_pooled_surg > 0 else 0.0
             r["3-Month Surgeries"] = g_pooled_surg
             r["3-Month Graft Resurg % (11–45d)"] = p_pct
-            r["Trend (M3 vs M1)"] = round(r[f"{m3} Graft Resurg % (11–45d)"] - r[f"{m1} Graft Resurg % (11–45d)"], 2)
+            r["3-Month Repeat Surg % (11–45d)"] = p_pct
+            r["Trend (M3 vs M1)"] = round(r[f"{m3} Repeat Surg % (11–45d)"] - r[f"{m1} Repeat Surg % (11–45d)"], 2)
             rows.append(r)
         return pd.DataFrame(rows)
 
@@ -767,8 +723,8 @@ def create_trend_pptx(trend_tables: dict[str, pd.DataFrame], month_names: list[s
     adh_rate_str = str(df_adh_ov.loc[df_adh_ov["Metric"] == "1M Adherence Rate (11–45 Days) [%]", "3-Month Total"].values[0])
     adh_delta_str = str(df_adh_ov.loc[df_adh_ov["Metric"] == "1M Adherence Rate (11–45 Days) [%]", "Trend (M3 - M1)"].values[0])
 
-    graft_resurg_val = str(df_rep_ov.loc[df_rep_ov["Procedure Category"] == "Total Graft Resurgeries (11–45 Days)", "3-Month Total"].values[0])
-    comb_resurg_val = str(df_rep_ov.loc[df_rep_ov["Procedure Category"] == "Total Combined Re-interventions (All Procedures)", "3-Month Total"].values[0])
+    graft_resurg_val = str(df_rep_ov.loc[df_rep_ov["Procedure Category"].str.startswith("Total Repeat Surgeries"), "3-Month Total"].values[0])
+    comb_resurg_val = str(df_rep_ov.loc[df_rep_ov["Procedure Category"].str.startswith("Total Combined Re-interventions"), "3-Month Total"].values[0])
 
     card_w = Inches(2.8)
     card_h = Inches(1.3)
@@ -776,10 +732,10 @@ def create_trend_pptx(trend_tables: dict[str, pd.DataFrame], month_names: list[s
 
     _add_kpi_card(s1, Inches(0.6), top_pos, card_w, card_h, "3-Month Primary Surgeries", tot_surg_str, f"Across {m1}, {m2}, {m3}", RGBColor(31, 78, 120))
     _add_kpi_card(s1, Inches(3.7), top_pos, card_w, card_h, "1M Adherence Rate (11–45d)", adh_rate_str, f"3-Month Pooled (Trend: {adh_delta_str})", RGBColor(39, 174, 96))
-    _add_kpi_card(s1, Inches(6.8), top_pos, card_w, card_h, "1M Graft Resurgery Rate", graft_resurg_val, "Rebubbling, Resuturing, KP", RGBColor(192, 57, 43))
-    _add_kpi_card(s1, Inches(9.9), top_pos, card_w, card_h, "All Re-interventions", comb_resurg_val, "Includes IOAB Injections & EUA", RGBColor(142, 68, 173))
+    _add_kpi_card(s1, Inches(6.8), top_pos, card_w, card_h, "1M Repeat Surgery Rate", graft_resurg_val, "REBUBBLING, RESUTURING, KP", RGBColor(192, 57, 43))
+    _add_kpi_card(s1, Inches(9.9), top_pos, card_w, card_h, "All Re-interventions", comb_resurg_val, "Includes Minor (Others)", RGBColor(142, 68, 173))
 
-    # Dual Chart Overview (Adherence vs Graft Resurgery Rate)
+    # Dual Chart Overview (Adherence vs Repeat Surgery Rate)
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11.5, 4.0), dpi=180)
     adh_vals = [float(str(df_adh_ov.loc[df_adh_ov["Metric"] == "1M Adherence Rate (11–45 Days) [%]", m].values[0]).replace('%', '')) for m in months]
     ax1.plot(months, adh_vals, marker='o', linewidth=3, markersize=8, color=c_green)
@@ -790,18 +746,18 @@ def create_trend_pptx(trend_tables: dict[str, pd.DataFrame], month_names: list[s
     ax1.set_ylim(0, 105)
     ax1.grid(True, linestyle="--", alpha=0.4)
 
-    # Extract graft resurgery rate %
+    # Extract repeat surgery rate %
     g_resurg_rates = []
     for m in months:
-        val_str = str(df_rep_ov.loc[df_rep_ov["Procedure Category"] == "Total Graft Resurgeries (11–45 Days)", m].values[0])
+        val_str = str(df_rep_ov.loc[df_rep_ov["Procedure Category"].str.startswith("Total Repeat Surgeries"), m].values[0])
         match = re.search(r'\(([\d.]+)%\)', val_str)
         g_resurg_rates.append(float(match.group(1)) if match else 0.0)
 
     ax2.plot(months, g_resurg_rates, marker='s', linewidth=3, markersize=8, color=c_red)
     for i, v in enumerate(g_resurg_rates):
         ax2.annotate(f"{v:.2f}%", (months[i], v), textcoords="offset points", xytext=(0, 8), ha='center', fontweight='bold', fontsize=9, color=c_red)
-    ax2.set_title("1-Month Graft Resurgery Rate (%) [11–45 Days]", fontsize=11, fontweight='bold', color=c_blue)
-    ax2.set_ylabel("Graft Resurgery Rate (%)", fontsize=9)
+    ax2.set_title("1-Month Repeat Surgery Rate (%) [11–45 Days]", fontsize=11, fontweight='bold', color=c_blue)
+    ax2.set_ylabel("Repeat Surgery Rate (%)", fontsize=9)
     ax2.set_ylim(0, max(g_resurg_rates + [5]) * 1.35)
     ax2.grid(True, linestyle="--", alpha=0.4)
 
@@ -920,27 +876,26 @@ def create_trend_pptx(trend_tables: dict[str, pd.DataFrame], month_names: list[s
     s4.shapes.add_picture(img_buf, Inches(0.8), Inches(1.4), Inches(11.7), Inches(5.6))
 
     # ─────────────────────────────────────────────────────────────
-    # SLIDE 5: Resurgery & Re-intervention Breakdown (11–45 Days)
+    # SLIDE 5: Resurgery Breakdown (11–45 Days)
     # ─────────────────────────────────────────────────────────────
     s5 = prs.slides.add_slide(blank_layout)
     _style_pptx_slide_header(
         s5,
-        "Resurgery & Re-intervention Clinical Categorization Breakdown (11–45 Days)",
-        "True Graft Resurgeries vs. Supportive / In-Clinic Interventions (IOAB Injections, EUA, Tarsorrhaphy)"
+        "Repeat Surgery Breakdown (11–45 Days Post-Surgery)",
+        "Real Repeat Surgeries (REBUBBLING, WOUND_RESUTURING, KP) vs. Others (Minor Procedures)"
     )
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11.5, 4.8), dpi=180)
     
-    # Left: Graft Resurgery Breakdown
-    graft_labels = ["Rebubbling", "Wound Resuturing", "Repeat KP"]
-    graft_keys = ["Rebubbling / Descematopexy", "Wound Resuturing", "Repeat Keratoplasty (KP)"]
-    x1 = np.arange(len(graft_labels))
+    # Left: Real Repeat Surgeries Breakdown
+    real_labels = ["REBUBBLING", "WOUND_RESUTURING", "KP"]
+    x1 = np.arange(len(real_labels))
     width = 0.25
 
     for idx, m in enumerate(months):
         cnts = []
-        for gk in graft_keys:
-            val_str = str(df_rep_ov.loc[df_rep_ov["Procedure Category"] == f"  • {gk}", m].values[0])
+        for rk in real_labels:
+            val_str = str(df_rep_ov.loc[df_rep_ov["Procedure Category"] == f"  • {rk}", m].values[0])
             m_cnt = int(re.match(r'(\d+)', val_str).group(1)) if re.match(r'(\d+)', val_str) else 0
             cnts.append(m_cnt)
         bars = ax1.bar(x1 + (idx - 1) * width, cnts, width, label=m, color=colors[idx % len(colors)], alpha=0.85)
@@ -949,33 +904,36 @@ def create_trend_pptx(trend_tables: dict[str, pd.DataFrame], month_names: list[s
             if h > 0:
                 ax1.annotate(f"{int(h)}", xy=(bar.get_x() + bar.get_width() / 2, h), xytext=(0, 3), textcoords="offset points", ha='center', va='bottom', fontsize=8.5, fontweight='bold')
 
-    ax1.set_title("Graft-Specific Resurgeries (True Re-operations)", fontsize=11, fontweight='bold', color=c_blue)
+    ax1.set_title("Real Repeat Surgeries (REBUBBLING, WOUND_RESUTURING, KP)", fontsize=11, fontweight='bold', color=c_blue)
     ax1.set_xticks(x1)
-    ax1.set_xticklabels(graft_labels, fontsize=9.5, fontweight='bold')
+    ax1.set_xticklabels(real_labels, fontsize=9.5, fontweight='bold')
     ax1.set_ylabel("Number of Procedures", fontsize=9)
     ax1.legend(frameon=True, facecolor="#F8F9FA")
     ax1.grid(True, axis='y', linestyle="--", alpha=0.4)
 
-    # Right: Supportive Interventions Breakdown
-    supp_labels = ["IOAB / Injections", "EUA / Exam", "Tarsorrhaphy", "AC Wash/Ref"]
-    supp_keys = ["IOAB / Antibiotic Injection", "EUA / Examination", "Tarsorrhaphy / Surface Protection", "AC Wash / Reformation"]
-    x2 = np.arange(len(supp_labels))
+    # Right: Real Repeat Surgeries vs Others (Minor Procedures)
+    comp_labels = ["Real Repeat Surgeries", "Others (Minor)"]
+    x2 = np.arange(len(comp_labels))
 
     for idx, m in enumerate(months):
         cnts = []
-        for sk in supp_keys:
-            val_str = str(df_rep_ov.loc[df_rep_ov["Procedure Category"] == f"  • {sk}", m].values[0])
-            m_cnt = int(re.match(r'(\d+)', val_str).group(1)) if re.match(r'(\d+)', val_str) else 0
-            cnts.append(m_cnt)
+        val_real = str(df_rep_ov.loc[df_rep_ov["Procedure Category"].str.startswith("Total Repeat Surgeries"), m].values[0])
+        m_real = int(re.match(r'(\d+)', val_real).group(1)) if re.match(r'(\d+)', val_real) else 0
+        cnts.append(m_real)
+
+        val_oth = str(df_rep_ov.loc[df_rep_ov["Procedure Category"].str.startswith("Others"), m].values[0])
+        m_oth = int(re.match(r'(\d+)', val_oth).group(1)) if re.match(r'(\d+)', val_oth) else 0
+        cnts.append(m_oth)
+
         bars = ax2.bar(x2 + (idx - 1) * width, cnts, width, label=m, color=colors[idx % len(colors)], alpha=0.85)
         for bar in bars:
             h = bar.get_height()
             if h > 0:
                 ax2.annotate(f"{int(h)}", xy=(bar.get_x() + bar.get_width() / 2, h), xytext=(0, 3), textcoords="offset points", ha='center', va='bottom', fontsize=8.5, fontweight='bold')
 
-    ax2.set_title("Supportive & In-Clinic Post-Op Interventions", fontsize=11, fontweight='bold', color=c_blue)
+    ax2.set_title("Real Repeat Surgeries vs. Others (Minor Procedures)", fontsize=11, fontweight='bold', color=c_blue)
     ax2.set_xticks(x2)
-    ax2.set_xticklabels(supp_labels, fontsize=9.5, fontweight='bold')
+    ax2.set_xticklabels(comp_labels, fontsize=9.5, fontweight='bold')
     ax2.set_ylabel("Number of Procedures", fontsize=9)
     ax2.legend(frameon=True, facecolor="#F8F9FA")
     ax2.grid(True, axis='y', linestyle="--", alpha=0.4)
@@ -1256,18 +1214,6 @@ def combine_adherence_periods(summary_dict: dict, adherence_df: pd.DataFrame, gr
     for period in FOLLOW_UP_PERIODS:
         ordered.extend([f'{period} Count', f'{period} %'])
     return combined[ordered]
-
-def categorize_repeat_surgery(x):
-    if pd.isna(x):
-        return "Others"
-    x_str = str(x).strip()
-    if x_str == "REBUBBLING":
-        return "REBUBBLING"
-    if x_str == "WOUND RESUTURING":
-        return "WOUND_RESUTURING"
-    if x_str in REPEAT_KP_PROCS:
-        return "KP"
-    return "Others"
 
 def line_category(diff):
     if pd.isna(diff):
@@ -1697,7 +1643,7 @@ def run_analysis_pipeline(df_raw: pd.DataFrame):
         (visit_df_primary["fup_surg_done"] == "YES")
     ].copy()
     repeat_df["Repeat_Category"] = repeat_df.apply(
-        lambda row: categorize_repeat_surgery(row.get("fup_done_surg_proc"), row.get("adv_surg_proc"))[0],
+        lambda row: categorize_repeat_surgery(row.get("fup_done_surg_proc"), row.get("adv_surg_proc")),
         axis=1
     )
 
