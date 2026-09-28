@@ -1046,17 +1046,30 @@ def create_trend_pptx(trend_tables: dict[str, pd.DataFrame], month_names: list[s
 
     # Extract repeat surgery rate %
     g_resurg_rates = []
+    g_resurg_counts = []
+    g_tot_surgs = []
     for m in months:
         val_str = str(df_rep_ov.loc[df_rep_ov["Procedure Category"].str.startswith("Total Repeat Surgeries"), m].values[0])
-        match = re.search(r'\(([\d.]+)%\)', val_str)
-        g_resurg_rates.append(float(match.group(1)) if match else 0.0)
+        match = re.search(r'(\d+)\s*\(([\d.]+)%\)', val_str)
+        if match:
+            cnt = int(match.group(1))
+            rate = float(match.group(2))
+        else:
+            cnt = 0
+            rate = 0.0
+        g_resurg_counts.append(cnt)
+        g_resurg_rates.append(rate)
+
+        tot_m_row = df_adh_ov.loc[df_adh_ov["Metric"] == "Total Primary Surgeries", m]
+        tot_m = int(tot_m_row.values[0]) if len(tot_m_row) > 0 and pd.notna(tot_m_row.values[0]) else 0
+        g_tot_surgs.append(tot_m)
 
     ax2.plot(months, g_resurg_rates, marker='s', linewidth=3, markersize=8, color=c_red)
-    for i, v in enumerate(g_resurg_rates):
-        ax2.annotate(f"{v:.2f}%", (months[i], v), textcoords="offset points", xytext=(0, 8), ha='center', fontweight='bold', fontsize=9, color=c_red)
+    for i, (v, cnt, tot) in enumerate(zip(g_resurg_rates, g_resurg_counts, g_tot_surgs)):
+        ax2.annotate(f"{v:.2f}%\n({cnt}/{tot})", (months[i], v), textcoords="offset points", xytext=(0, 8), ha='center', fontweight='bold', fontsize=8.5, color=c_red)
     ax2.set_title("1-Month Repeat Surgery Rate (%) [11–45 Days]", fontsize=11, fontweight='bold', color=c_blue)
     ax2.set_ylabel("Repeat Surgery Rate (%)", fontsize=9)
-    ax2.set_ylim(0, max(g_resurg_rates + [5]) * 1.35)
+    ax2.set_ylim(0, max(g_resurg_rates + [5]) * 1.45)
     ax2.grid(True, linestyle="--", alpha=0.4)
 
     plt.tight_layout()
@@ -1154,25 +1167,35 @@ def create_trend_pptx(trend_tables: dict[str, pd.DataFrame], month_names: list[s
     for idx, m in enumerate(months):
         rates = []
         counts = []
-        for val_str in sub_camp[m]:
-            match = re.search(r'(\d+)\s*\(([\d.]+)%\)', str(val_str))
+        totals = []
+        for c in campuses_rep:
+            tot_row = df_rep_camp[(df_rep_camp["Campus"] == c) & (df_rep_camp["Category"] == "Total Primary Surgeries")]
+            tot_val = int(tot_row[m].values[0]) if len(tot_row) > 0 and pd.notna(tot_row[m].values[0]) else 0
+            totals.append(tot_val)
+
+            val_series = sub_camp.loc[sub_camp["Campus"] == c, m]
+            val_str = str(val_series.values[0]) if len(val_series) > 0 else ""
+            match = re.search(r'(\d+)\s*\(([\d.]+)%\)', val_str)
             if match:
-                counts.append(int(match.group(1)))
-                rates.append(float(match.group(2)))
+                cnt = int(match.group(1))
+                rate = float(match.group(2))
             else:
-                counts.append(0)
-                rates.append(0.0)
+                cnt = 0
+                rate = 0.0
+            counts.append(cnt)
+            rates.append(rate)
+
         bars = ax.bar(x + (idx - 1) * width, rates, width, label=m, color=colors[idx % len(colors)], alpha=0.85)
-        for bar, rate, cnt in zip(bars, rates, counts):
+        for bar, rate, cnt, tot in zip(bars, rates, counts, totals):
             h = bar.get_height()
             if h > 0:
-                ax.annotate(f"{h:.1f}%\n(n={cnt})", xy=(bar.get_x() + bar.get_width() / 2, h), xytext=(0, 3), textcoords="offset points", ha='center', va='bottom', fontsize=8.0, fontweight='bold')
+                ax.annotate(f"{rate:.1f}%\n({cnt}/{tot})", xy=(bar.get_x() + bar.get_width() / 2, h), xytext=(0, 3), textcoords="offset points", ha='center', va='bottom', fontsize=7.5, fontweight='bold')
 
     ax.set_title("Real Repeat Surgery Rate by Campus (% of Total Campus Surgeries) [11–45 Days]", fontsize=13, fontweight='bold', color=c_blue, pad=12)
     ax.set_xticks(x)
     ax.set_xticklabels(campuses_rep, fontsize=10, fontweight='bold')
     ax.set_ylabel("Repeat Surgery Rate (% of Campus Surgeries)", fontsize=10)
-    ax.set_ylim(0, max([bar.get_height() for bar in ax.patches] + [6]) * 1.35)
+    ax.set_ylim(0, max([bar.get_height() for bar in ax.patches] + [6]) * 1.40)
     ax.legend(frameon=True, facecolor="#F8F9FA", loc="upper right")
     ax.grid(True, axis='y', linestyle="--", alpha=0.4)
 
@@ -1201,28 +1224,36 @@ def create_trend_pptx(trend_tables: dict[str, pd.DataFrame], month_names: list[s
     width = 0.25
 
     for idx, m in enumerate(months):
+        tot_m_row = df_adh_ov.loc[df_adh_ov["Metric"] == "Total Primary Surgeries", m]
+        tot_m = int(tot_m_row.values[0]) if len(tot_m_row) > 0 and pd.notna(tot_m_row.values[0]) else 0
+
         rates = []
         counts = []
+        totals = []
         for rk in real_labels:
             val_str = str(df_rep_ov.loc[df_rep_ov["Procedure Category"] == f"  • {rk}", m].values[0])
             match = re.search(r'(\d+)\s*\(([\d.]+)%\)', val_str)
             if match:
-                counts.append(int(match.group(1)))
-                rates.append(float(match.group(2)))
+                cnt = int(match.group(1))
+                rate = float(match.group(2))
             else:
-                counts.append(0)
-                rates.append(0.0)
+                cnt = 0
+                rate = 0.0
+            counts.append(cnt)
+            rates.append(rate)
+            totals.append(tot_m)
+
         bars = ax1.bar(x1 + (idx - 1) * width, rates, width, label=m, color=colors[idx % len(colors)], alpha=0.85)
-        for bar, rate, cnt in zip(bars, rates, counts):
+        for bar, rate, cnt, tot in zip(bars, rates, counts, totals):
             h = bar.get_height()
             if h > 0:
-                ax1.annotate(f"{rate:.2f}%\n(n={cnt})", xy=(bar.get_x() + bar.get_width() / 2, h), xytext=(0, 3), textcoords="offset points", ha='center', va='bottom', fontsize=8.0, fontweight='bold')
+                ax1.annotate(f"{rate:.2f}%\n({cnt}/{tot})", xy=(bar.get_x() + bar.get_width() / 2, h), xytext=(0, 3), textcoords="offset points", ha='center', va='bottom', fontsize=7.5, fontweight='bold')
 
     ax1.set_title("Identified Re-surgeries as % of Total Surgeries", fontsize=11, fontweight='bold', color=c_blue)
     ax1.set_xticks(x1)
     ax1.set_xticklabels(real_labels, fontsize=9.5, fontweight='bold')
     ax1.set_ylabel("Repeat Surgery Rate (%)", fontsize=9)
-    ax1.set_ylim(0, max([bar.get_height() for bar in ax1.patches] + [3]) * 1.35)
+    ax1.set_ylim(0, max([bar.get_height() for bar in ax1.patches] + [3]) * 1.40)
     ax1.legend(frameon=True, facecolor="#F8F9FA")
     ax1.grid(True, axis='y', linestyle="--", alpha=0.4)
 
@@ -1234,6 +1265,7 @@ def create_trend_pptx(trend_tables: dict[str, pd.DataFrame], month_names: list[s
     for idx, m in enumerate(months):
         kp_rates = []
         kp_counts = []
+        kp_totals = []
         for c in kp_campuses:
             tot_row = df_rep_camp[(df_rep_camp["Campus"] == c) & (df_rep_camp["Category"] == "Total Primary Surgeries")]
             tot_val = tot_row[m].values[0] if len(tot_row) > 0 else 0
@@ -1246,21 +1278,23 @@ def create_trend_pptx(trend_tables: dict[str, pd.DataFrame], month_names: list[s
                 kp_rate = round(kp_cnt / tot_val * 100, 2) if tot_val > 0 else 0.0
             except:
                 kp_cnt = 0
+                tot_val = 0
                 kp_rate = 0.0
             kp_counts.append(kp_cnt)
+            kp_totals.append(tot_val)
             kp_rates.append(kp_rate)
 
         bars2 = ax2.bar(x2 + (idx - 1) * width, kp_rates, width, label=m, color=colors[idx % len(colors)], alpha=0.85)
-        for bar, rate, cnt in zip(bars2, kp_rates, kp_counts):
+        for bar, rate, cnt, tot in zip(bars2, kp_rates, kp_counts, kp_totals):
             h = bar.get_height()
             if h > 0:
-                ax2.annotate(f"{rate:.2f}%\n(n={cnt})", xy=(bar.get_x() + bar.get_width() / 2, h), xytext=(0, 3), textcoords="offset points", ha='center', va='bottom', fontsize=8.0, fontweight='bold')
+                ax2.annotate(f"{rate:.2f}%\n({cnt}/{tot})", xy=(bar.get_x() + bar.get_width() / 2, h), xytext=(0, 3), textcoords="offset points", ha='center', va='bottom', fontsize=7.5, fontweight='bold')
 
     ax2.set_title("Repeat Keratoplasty (KP) Rate by Campus (% of Campus Surgeries)", fontsize=11, fontweight='bold', color=c_blue)
     ax2.set_xticks(x2)
     ax2.set_xticklabels(kp_campuses, fontsize=9.5, fontweight='bold')
     ax2.set_ylabel("Repeat KP Rate (%)", fontsize=9)
-    ax2.set_ylim(0, max([bar.get_height() for bar in ax2.patches] + [2]) * 1.35)
+    ax2.set_ylim(0, max([bar.get_height() for bar in ax2.patches] + [2]) * 1.40)
     ax2.legend(frameon=True, facecolor="#F8F9FA")
     ax2.grid(True, axis='y', linestyle="--", alpha=0.4)
 
@@ -1290,25 +1324,35 @@ def create_trend_pptx(trend_tables: dict[str, pd.DataFrame], month_names: list[s
     for idx, m in enumerate(months):
         rates = []
         counts = []
-        for val_str in sub_surg[m]:
-            match = re.search(r'(\d+)\s*\(([\d.]+)%\)', str(val_str))
+        totals = []
+        for p in procs_rep:
+            tot_row = df_rep_surg[(df_rep_surg["Surgery Procedure"] == p) & (df_rep_surg["Category"] == "Total Primary Surgeries")]
+            tot_val = int(tot_row[m].values[0]) if len(tot_row) > 0 and pd.notna(tot_row[m].values[0]) else 0
+            totals.append(tot_val)
+
+            val_series = sub_surg.loc[sub_surg["Surgery Procedure"] == p, m]
+            val_str = str(val_series.values[0]) if len(val_series) > 0 else ""
+            match = re.search(r'(\d+)\s*\(([\d.]+)%\)', val_str)
             if match:
-                counts.append(int(match.group(1)))
-                rates.append(float(match.group(2)))
+                cnt = int(match.group(1))
+                rate = float(match.group(2))
             else:
-                counts.append(0)
-                rates.append(0.0)
+                cnt = 0
+                rate = 0.0
+            counts.append(cnt)
+            rates.append(rate)
+
         bars = ax.bar(x + (idx - 1) * width, rates, width, label=m, color=colors[idx % len(colors)], alpha=0.85)
-        for bar, rate, cnt in zip(bars, rates, counts):
+        for bar, rate, cnt, tot in zip(bars, rates, counts, totals):
             h = bar.get_height()
             if h > 0:
-                ax.annotate(f"{h:.1f}%\n(n={cnt})", xy=(bar.get_x() + bar.get_width() / 2, h), xytext=(0, 3), textcoords="offset points", ha='center', va='bottom', fontsize=8.0, fontweight='bold')
+                ax.annotate(f"{rate:.1f}%\n({cnt}/{tot})", xy=(bar.get_x() + bar.get_width() / 2, h), xytext=(0, 3), textcoords="offset points", ha='center', va='bottom', fontsize=7.5, fontweight='bold')
 
     ax.set_title("Real Repeat Surgery Rate by Surgical Procedure (% of Group Surgeries) [11–45 Days]", fontsize=13, fontweight='bold', color=c_blue, pad=12)
     ax.set_xticks(x)
     ax.set_xticklabels(procs_rep, fontsize=9.5, fontweight='bold', rotation=15)
     ax.set_ylabel("Repeat Surgery Rate (% of Procedure Surgeries)", fontsize=10)
-    ax.set_ylim(0, max([bar.get_height() for bar in ax.patches] + [6]) * 1.35)
+    ax.set_ylim(0, max([bar.get_height() for bar in ax.patches] + [6]) * 1.40)
     ax.legend(frameon=True, facecolor="#F8F9FA", loc="upper right")
     ax.grid(True, axis='y', linestyle="--", alpha=0.4)
 
