@@ -187,6 +187,211 @@ def categorize_repeat_surgery(proc_name, adv_proc_name=None) -> str:
     return "Others"
 
 
+def build_va_logmar_dict(df: pd.DataFrame, va_cols: list[str]) -> dict:
+    """Builds a lookup dictionary mapping raw visual acuity notations to LogMAR values."""
+    unique_vals = set()
+    for col in va_cols:
+        if col in df.columns:
+            unique_vals.update(df[col].dropna().unique())
+
+    mapping = {}
+    for va in unique_vals:
+        va_str = str(va).strip().upper()
+        if va_str in VA_SPECIAL_MAP:
+            mapping[va_str] = VA_SPECIAL_MAP[va_str]
+        elif "/" in va_str:
+            try:
+                cleaned = va_str.replace("P", "")
+                num, den = cleaned.split("/")
+                mapping[va_str] = round(-1 * np.log10(float(num) / float(den)), 4)
+            except (ValueError, ZeroDivisionError):
+                mapping[va_str] = np.nan
+        else:
+            mapping[va_str] = np.nan
+    return mapping
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Visual Impairment Categories & Confusion Matrix (WHO Classification Standard)
+# ─────────────────────────────────────────────────────────────────────────────
+VISUAL_IMPAIRMENT_CATEGORIES = [
+    "1. Normal (<= 6/12)",
+    "2. Mild Impairment (< 6/12 - 6/18)",
+    "3. Moderate Impairment (< 6/18 - 6/60)",
+    "4. Severe Impairment (< 6/60 - 3/60)",
+    "5. Blindness (< 3/60)"
+]
+
+
+def classify_visual_impairment(logmar) -> str:
+    """
+    Classifies a LogMAR value into WHO Visual Impairment standard categories:
+      - 1. Normal (<= 6/12, LogMAR <= 0.30)
+      - 2. Mild Impairment (< 6/12 to 6/18, LogMAR 0.31 - 0.48)
+      - 3. Moderate Impairment (< 6/18 to 6/60, LogMAR 0.49 - 1.00)
+      - 4. Severe Impairment (< 6/60 to 3/60, LogMAR 1.01 - 1.30)
+      - 5. Blindness (< 3/60, LogMAR > 1.30, including CF, HM, PL, NPL)
+    """
+    if pd.isna(logmar):
+        return np.nan
+    try:
+        val = float(logmar)
+    except (ValueError, TypeError):
+        return np.nan
+    if val <= 0.301:
+        return "1. Normal (<= 6/12)"
+    elif val <= 0.481:
+        return "2. Mild Impairment (< 6/12 - 6/18)"
+    elif val <= 1.001:
+        return "3. Moderate Impairment (< 6/18 - 6/60)"
+    elif val <= 1.301:
+        return "4. Severe Impairment (< 6/60 - 3/60)"
+    else:
+        return "5. Blindness (< 3/60)"
+
+
+def compute_vision_confusion_matrix(
+    va_df: pd.DataFrame,
+    pre_col: str = "preop_logmar",
+    post_col: str = "1m_logmar",
+    campus: str = "All",
+    surg_proc: str = "All"
+) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
+    """
+    Computes Pre vs Post Visual Impairment Confusion Matrix.
+    CRITICAL CLINICAL REQUIREMENT: Strictly excludes THPK surgery type.
+    Supports dynamic drilldown by Campus (sap_code) and Surgery Procedure (surg_proc_group).
+    Returns:
+      - cm_counts (pd.DataFrame): 5x5 confusion matrix + Total Pre-op and Total Post-op margins
+      - cm_pct (pd.DataFrame): row percentage (%) matrix showing post-op transitions
+      - stats (dict): summary statistics for total paired, improved, stable, worsened
+    """
+    empty_df = pd.DataFrame(0, index=VISUAL_IMPAIRMENT_CATEGORIES, columns=VISUAL_IMPAIRMENT_CATEGORIES)
+    empty_df["Total Pre-op"] = 0
+    tot_row = pd.Series(0, index=empty_df.columns, name="Total Post-op")
+    empty_with_totals = pd.concat([empty_df, pd.DataFrame([tot_row])])
+    empty_stats = {
+        "total": 0, "improved": 0, "improved_pct": 0.0,
+        "stable": 0, "stable_pct": 0.0, "worsened": 0, "worsened_pct": 0.0
+    }
+
+    if va_df is None or len(va_df) == 0:
+        return empty_with_totals, empty_df.copy(), empty_stats
+
+    # 1. Strictly exclude THPK
+    df_f = va_df[va_df["surg_proc_group"] != "THPK"].copy()
+
+    # 2. Campus drilldown
+    if campus != "All" and "sap_code" in df_f.columns:
+        df_f = df_f[df_f["sap_code"] == campus]
+
+    # 3. Surgery Procedure drilldown
+    if surg_proc != "All" and "surg_proc_group" in df_f.columns:
+        df_f = df_f[df_f["surg_proc_group"] == surg_proc]
+
+    # 4. Require paired non-null pre and post logmar
+    if pre_col not in df_f.columns or post_col not in df_f.columns:
+        return empty_with_totals, empty_df.copy(), empty_stats
+
+    valid_mask = df_f[pre_col].notna() & df_f[post_col].notna()
+    paired = df_f[valid_mask].copy()
+
+    total_paired = len(paired)
+    if total_paired == 0:
+        return empty_with_totals, empty_df.copy(), empty_stats
+
+    paired["Pre_Cat"] = paired[pre_col].apply(classify_visual_impairment)
+    paired["Post_Cat"] = paired[post_col].apply(classify_visual_impairment)
+
+    paired["Pre_Cat"] = pd.Categorical(paired["Pre_Cat"], categories=VISUAL_IMPAIRMENT_CATEGORIES, ordered=True)
+    paired["Post_Cat"] = pd.Categorical(paired["Post_Cat"], categories=VISUAL_IMPAIRMENT_CATEGORIES, ordered=True)
+
+    cm = pd.crosstab(paired["Pre_Cat"], paired["Post_Cat"], dropna=False)
+
+    # Transition analysis
+    cat_to_idx = {c: i for i, c in enumerate(VISUAL_IMPAIRMENT_CATEGORIES)}
+    pre_i = paired["Pre_Cat"].map(cat_to_idx)
+    post_i = paired["Post_Cat"].map(cat_to_idx)
+
+    # Lower index = better vision (0: Normal, 4: Blindness)
+    improved = int((post_i < pre_i).sum())
+    stable = int((post_i == pre_i).sum())
+    worsened = int((post_i > pre_i).sum())
+
+    stats = {
+        "total": total_paired,
+        "improved": improved,
+        "improved_pct": round(improved / total_paired * 100, 1) if total_paired > 0 else 0.0,
+        "stable": stable,
+        "stable_pct": round(stable / total_paired * 100, 1) if total_paired > 0 else 0.0,
+        "worsened": worsened,
+        "worsened_pct": round(worsened / total_paired * 100, 1) if total_paired > 0 else 0.0,
+    }
+
+    # Add marginal totals
+    cm_with_totals = cm.copy()
+    cm_with_totals["Total Pre-op"] = cm_with_totals.sum(axis=1)
+    tot_col = cm_with_totals.sum(axis=0)
+    tot_col.name = "Total Post-op"
+    cm_with_totals = pd.concat([cm_with_totals, pd.DataFrame([tot_col])])
+
+    # Row percentage
+    row_sums = cm.sum(axis=1)
+    cm_pct = cm.div(row_sums, axis=0).fillna(0) * 100
+    cm_pct = cm_pct.round(1)
+
+    return cm_with_totals, cm_pct, stats
+
+
+def render_confusion_matrix_heatmap(cm_counts: pd.DataFrame, title: str = "Pre-op vs. Post-op Visual Impairment Confusion Matrix") -> plt.Figure:
+    """
+    Renders an executive confusion matrix heatmap using matplotlib.
+    Highlighting:
+      - Diagonal: Stable vision (light blue)
+      - Upper right / above diagonal (post_col < pre_row in visual index): Improved vision (light green)
+      - Lower left / below diagonal (post_col > pre_row in visual index): Worsened vision (light red)
+    """
+    core_cm = cm_counts.loc[VISUAL_IMPAIRMENT_CATEGORIES, VISUAL_IMPAIRMENT_CATEGORIES]
+    matrix = core_cm.values
+
+    fig, ax = plt.subplots(figsize=(8.2, 5.8), dpi=160)
+    ax.imshow(matrix, cmap="Blues", alpha=0.25)
+
+    short_labels = ["Normal\n(<=6/12)", "Mild\n(6/18)", "Moderate\n(6/60)", "Severe\n(3/60)", "Blindness\n(<3/60)"]
+    ax.set_xticks(np.arange(len(short_labels)))
+    ax.set_yticks(np.arange(len(short_labels)))
+    ax.set_xticklabels(short_labels, fontsize=9.5, fontweight='bold')
+    ax.set_yticklabels(short_labels, fontsize=9.5, fontweight='bold')
+
+    ax.set_xlabel("Post-Operative Visual Category", fontsize=11, fontweight='bold', color="#1F4E78", labelpad=8)
+    ax.set_ylabel("Pre-Operative Visual Category", fontsize=11, fontweight='bold', color="#1F4E78", labelpad=8)
+    ax.set_title(title, fontsize=12, fontweight='bold', color="#1F4E78", pad=12)
+
+    for i in range(len(VISUAL_IMPAIRMENT_CATEGORIES)):
+        row_tot = core_cm.iloc[i].sum()
+        for j in range(len(VISUAL_IMPAIRMENT_CATEGORIES)):
+            val = int(matrix[i, j])
+            pct_row = (val / row_tot * 100) if row_tot > 0 else 0
+
+            # Transitions: lower index is better vision
+            if j < i:  # Improved
+                box_color = "#E8F8F5" if val > 0 else "#FAFAFA"
+                txt_color = "#1E8449" if val > 0 else "#BDC3C7"
+            elif j == i:  # Stable
+                box_color = "#EBF5FB" if val > 0 else "#FAFAFA"
+                txt_color = "#2471A3" if val > 0 else "#BDC3C7"
+            else:  # Worsened
+                box_color = "#FDEDEC" if val > 0 else "#FAFAFA"
+                txt_color = "#C0392B" if val > 0 else "#BDC3C7"
+
+            cell_txt = f"{val}\n({pct_row:.0f}%)" if val > 0 else "0"
+            ax.text(j, i, cell_txt, ha="center", va="center", color=txt_color, fontsize=9.5, fontweight="bold",
+                    bbox=dict(boxstyle="square,pad=0.35", facecolor=box_color, edgecolor="#D5D8DC", alpha=0.9))
+
+    plt.tight_layout()
+    return fig
+
+
 def load_and_clean_month_df(file_source) -> pd.DataFrame:
     """Load campus sheets from an excel file buffer or path, standardizing dates and columns."""
     dfs = []
@@ -258,11 +463,24 @@ def load_and_clean_month_df(file_source) -> pd.DataFrame:
 
     df = df.dropna(how="all").dropna(subset=["id"]).sort_values(["id", "surg_date", "visit_date"])
     df["days_after_surgery"] = (df["visit_date"] - df["surg_date"]).dt.days
+
+    # Visual Acuity LogMAR parsing
+    VA_COLS = ['ucva', 'pin_hole', 'bcva']
+    va_map = build_va_logmar_dict(df, VA_COLS)
+    for col in VA_COLS:
+        if col in df.columns:
+            df[f"{col}_logmar"] = df[col].map(va_map)
+    existing_va = [f"{c}_logmar" for c in VA_COLS if f"{c}_logmar" in df.columns]
+    if existing_va:
+        df["best_va_logmar"] = df[existing_va].min(axis=1)
+    else:
+        df["best_va_logmar"] = np.nan
+
     return df
 
 
 def process_single_month(df: pd.DataFrame) -> dict:
-    """Extract primary surgeries, 1M adherence, and 1M repeat surgeries for a single month."""
+    """Extract primary surgeries, 1M adherence, 1M repeat surgeries, and VA summary for a single month."""
     for col_req in ['advise_surg', 'fup_surg_done', 'fup_done_surg_proc', 'adv_surg_proc']:
         if col_req not in df.columns:
             df[col_req] = None
@@ -316,10 +534,26 @@ def process_single_month(df: pd.DataFrame) -> dict:
     surgery_df['has_repeat_surgery_1m'] = surgery_df['id'].isin(real_resurg_ids)
     surgery_df['has_any_reintervention_1m'] = surgery_df['id'].isin(any_reintervention_ids)
 
+    # Visual Acuity Summary (Strictly Exclude THPK)
+    va_df = visit_df_primary[visit_df_primary['surg_proc_group'] != 'THPK'].copy()
+    if "best_va_logmar" in va_df.columns:
+        preop_b = va_df[va_df["visit_date"] < va_df["surg_date"]].sort_values(["id", "visit_date"]).groupby("id").tail(1)[["id", "best_va_logmar"]].rename(columns={"best_va_logmar": "preop_logmar"})
+        preop_s = va_df[va_df["visit_date"] == va_df["surg_date"]].sort_values(["id", "visit_date"]).groupby("id").tail(1)[["id", "best_va_logmar"]].rename(columns={"best_va_logmar": "preop_logmar"})
+        preop = preop_b.combine_first(preop_s.set_index("id")).reset_index()
+
+        fup_1m_va = va_df[va_df["days_after_surgery"].between(11, 45) & va_df["best_va_logmar"].notna()].sort_values(["id", "visit_date"]).groupby("id").tail(1)[["id", "best_va_logmar"]].rename(columns={"best_va_logmar": "1m_logmar"})
+
+        base_va = va_df.groupby("id").first().reset_index()
+        keep_va = [c for c in ["id", "sap_code", "surg_proc_group", "surgeon_name", "surg_date"] if c in base_va.columns]
+        va_summary = base_va[keep_va].merge(preop, on="id", how="left").merge(fup_1m_va, on="id", how="left")
+    else:
+        va_summary = pd.DataFrame(columns=["id", "sap_code", "surg_proc_group", "preop_logmar", "1m_logmar"])
+
     return {
         "surgery_df": surgery_df,
         "visit_df_primary": visit_df_primary,
         "repeat_1m": repeat_1m,
+        "va_summary": va_summary,
     }
 
 
@@ -555,6 +789,18 @@ def build_3month_trend_tables(month_results: dict[str, dict]) -> dict[str, pd.Da
     df_rep_campus = _grouped_resurgery_breakdown("sap_code", "Campus")
     df_rep_surg = _grouped_resurgery_breakdown("surg_proc_group", "Surgery Procedure")
 
+    # Pooled VA Summary across 3 Months (Strictly Non-THPK)
+    all_va = []
+    for m in month_keys:
+        vdf = month_results[m].get("va_summary", pd.DataFrame()).copy()
+        if len(vdf) > 0:
+            vdf["Month"] = m
+            all_va.append(vdf)
+    comb_va = pd.concat(all_va, ignore_index=True) if all_va else pd.DataFrame()
+
+    cm_counts, _, _ = compute_vision_confusion_matrix(comb_va, pre_col="preop_logmar", post_col="1m_logmar")
+    df_va_cm = cm_counts.reset_index().rename(columns={"index": "Pre-op Category (WHO Standard)"})
+
     return {
         "1_Trend_Adherence_Overall": df_adh_overall,
         "2_Trend_Adherence_Campus": df_adh_campus,
@@ -562,11 +808,12 @@ def build_3month_trend_tables(month_results: dict[str, dict]) -> dict[str, pd.Da
         "4_Trend_Resurgery_Overall": df_rep_overall,
         "5_Trend_Resurgery_Campus": df_rep_campus,
         "6_Trend_Resurgery_SurgType": df_rep_surg,
+        "7_Trend_VA_Confusion_Matrix": df_va_cm,
     }
 
 
 def create_trend_excel(trend_tables: dict[str, pd.DataFrame]) -> io.BytesIO:
-    """Creates an executive formatted openpyxl workbook with all 6 trend sheets."""
+    """Creates an executive formatted openpyxl workbook with all 7 trend sheets."""
     output = io.BytesIO()
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
@@ -590,7 +837,7 @@ def create_trend_excel(trend_tables: dict[str, pd.DataFrame]) -> io.BytesIO:
 
     TAB_COLORS = {
         "1": "2B579A", "2": "27AE60", "3": "D35400",
-        "4": "C0392B", "5": "8E44AD", "6": "2980B9"
+        "4": "C0392B", "5": "8E44AD", "6": "2980B9", "7": "16A085"
     }
 
     for sheet_name, df in trend_tables.items():
@@ -775,7 +1022,7 @@ def create_trend_pptx(trend_tables: dict[str, pd.DataFrame], month_names: list[s
     adh_delta_str = str(df_adh_ov.loc[df_adh_ov["Metric"] == "1M Adherence Rate (11–45 Days) [%]", "Trend (M3 - M1)"].values[0])
 
     graft_resurg_val = str(df_rep_ov.loc[df_rep_ov["Procedure Category"].str.startswith("Total Repeat Surgeries"), "3-Month Total"].values[0])
-    comb_resurg_val = str(df_rep_ov.loc[df_rep_ov["Procedure Category"].str.startswith("Total Combined Re-interventions"), "3-Month Total"].values[0])
+    kp_resurg_val = str(df_rep_ov.loc[df_rep_ov["Procedure Category"] == "  • KP", "3-Month Total"].values[0])
 
     card_w = Inches(2.8)
     card_h = Inches(1.3)
@@ -783,8 +1030,8 @@ def create_trend_pptx(trend_tables: dict[str, pd.DataFrame], month_names: list[s
 
     _add_kpi_card(s1, Inches(0.6), top_pos, card_w, card_h, "3-Month Primary Surgeries", tot_surg_str, f"Across {m1}, {m2}, {m3}", RGBColor(31, 78, 120))
     _add_kpi_card(s1, Inches(3.7), top_pos, card_w, card_h, "1M Adherence Rate (11–45d)", adh_rate_str, f"3-Month Pooled (Trend: {adh_delta_str})", RGBColor(39, 174, 96))
-    _add_kpi_card(s1, Inches(6.8), top_pos, card_w, card_h, "1M Repeat Surgery Rate", graft_resurg_val, "REBUBBLING, RESUTURING, KP", RGBColor(192, 57, 43))
-    _add_kpi_card(s1, Inches(9.9), top_pos, card_w, card_h, "All Re-interventions", comb_resurg_val, "Includes Minor (Others)", RGBColor(142, 68, 173))
+    _add_kpi_card(s1, Inches(6.8), top_pos, card_w, card_h, "1M Identified Resurgeries", graft_resurg_val, "Rebubbling, Resuturing, KP", RGBColor(192, 57, 43))
+    _add_kpi_card(s1, Inches(9.9), top_pos, card_w, card_h, "1M Repeat Keratoplasty (KP)", kp_resurg_val, "Specific Repeat KP / Graft Replacement", RGBColor(142, 68, 173))
 
     # Dual Chart Overview (Adherence vs Repeat Surgery Rate)
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11.5, 4.0), dpi=180)
@@ -895,7 +1142,7 @@ def create_trend_pptx(trend_tables: dict[str, pd.DataFrame], month_names: list[s
     _style_pptx_slide_header(
         s4,
         "1-Month Graft Resurgery Rate by Campus (11–45 Days Post-Surgery)",
-        "Graft-Specific Resurgeries: Rebubbling / Descematopexy, Wound Resuturing, and Repeat Keratoplasty (KP)"
+        "Re-surgeries shown as a proportion (%) of Total Surgeries for each Campus (Rebubbling, Resuturing, KP)"
     )
 
     fig, ax = plt.subplots(figsize=(11.5, 5.2), dpi=180)
@@ -906,20 +1153,26 @@ def create_trend_pptx(trend_tables: dict[str, pd.DataFrame], month_names: list[s
 
     for idx, m in enumerate(months):
         rates = []
+        counts = []
         for val_str in sub_camp[m]:
-            match = re.search(r'\(([\d.]+)%\)', str(val_str))
-            rates.append(float(match.group(1)) if match else 0.0)
+            match = re.search(r'(\d+)\s*\(([\d.]+)%\)', str(val_str))
+            if match:
+                counts.append(int(match.group(1)))
+                rates.append(float(match.group(2)))
+            else:
+                counts.append(0)
+                rates.append(0.0)
         bars = ax.bar(x + (idx - 1) * width, rates, width, label=m, color=colors[idx % len(colors)], alpha=0.85)
-        for bar in bars:
+        for bar, rate, cnt in zip(bars, rates, counts):
             h = bar.get_height()
             if h > 0:
-                ax.annotate(f"{h:.1f}%", xy=(bar.get_x() + bar.get_width() / 2, h), xytext=(0, 3), textcoords="offset points", ha='center', va='bottom', fontsize=8.5, fontweight='bold')
+                ax.annotate(f"{h:.1f}%\n(n={cnt})", xy=(bar.get_x() + bar.get_width() / 2, h), xytext=(0, 3), textcoords="offset points", ha='center', va='bottom', fontsize=8.0, fontweight='bold')
 
-    ax.set_title("Real Repeat Surgery Rate by Campus across 3 Months (Window: 11–45 Days)", fontsize=13, fontweight='bold', color=c_blue, pad=12)
+    ax.set_title("Real Repeat Surgery Rate by Campus (% of Total Campus Surgeries) [11–45 Days]", fontsize=13, fontweight='bold', color=c_blue, pad=12)
     ax.set_xticks(x)
     ax.set_xticklabels(campuses_rep, fontsize=10, fontweight='bold')
-    ax.set_ylabel("Repeat Surgery Rate (%)", fontsize=10)
-    ax.set_ylim(0, max([bar.get_height() for bar in ax.patches] + [6]) * 1.3)
+    ax.set_ylabel("Repeat Surgery Rate (% of Campus Surgeries)", fontsize=10)
+    ax.set_ylim(0, max([bar.get_height() for bar in ax.patches] + [6]) * 1.35)
     ax.legend(frameon=True, facecolor="#F8F9FA", loc="upper right")
     ax.grid(True, axis='y', linestyle="--", alpha=0.4)
 
@@ -931,65 +1184,83 @@ def create_trend_pptx(trend_tables: dict[str, pd.DataFrame], month_names: list[s
     s4.shapes.add_picture(img_buf, Inches(0.8), Inches(1.4), Inches(11.7), Inches(5.6))
 
     # ─────────────────────────────────────────────────────────────
-    # SLIDE 5: Resurgery Breakdown (11–45 Days)
+    # SLIDE 5: Resurgery Rates by Specific Identified Category (11–45 Days)
     # ─────────────────────────────────────────────────────────────
     s5 = prs.slides.add_slide(blank_layout)
     _style_pptx_slide_header(
         s5,
-        "Repeat Surgery Breakdown (11–45 Days Post-Surgery)",
-        "Real Repeat Surgeries (REBUBBLING, WOUND_RESUTURING, KP) vs. Others (Minor Procedures)"
+        "Repeat Surgery Rates by Specific Identified Category (11–45 Days Post-Surgery)",
+        "Proportions (%) of Total Primary Surgeries: Rebubbling, Wound Resuturing, and Repeat Keratoplasty (KP)"
     )
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11.5, 4.8), dpi=180)
     
-    # Left: Real Repeat Surgeries Breakdown
+    # Left: Specific Identified Re-surgeries as % of Total Primary Surgeries
     real_labels = ["REBUBBLING", "WOUND_RESUTURING", "KP"]
     x1 = np.arange(len(real_labels))
     width = 0.25
 
     for idx, m in enumerate(months):
-        cnts = []
+        rates = []
+        counts = []
         for rk in real_labels:
             val_str = str(df_rep_ov.loc[df_rep_ov["Procedure Category"] == f"  • {rk}", m].values[0])
-            m_cnt = int(re.match(r'(\d+)', val_str).group(1)) if re.match(r'(\d+)', val_str) else 0
-            cnts.append(m_cnt)
-        bars = ax1.bar(x1 + (idx - 1) * width, cnts, width, label=m, color=colors[idx % len(colors)], alpha=0.85)
-        for bar in bars:
+            match = re.search(r'(\d+)\s*\(([\d.]+)%\)', val_str)
+            if match:
+                counts.append(int(match.group(1)))
+                rates.append(float(match.group(2)))
+            else:
+                counts.append(0)
+                rates.append(0.0)
+        bars = ax1.bar(x1 + (idx - 1) * width, rates, width, label=m, color=colors[idx % len(colors)], alpha=0.85)
+        for bar, rate, cnt in zip(bars, rates, counts):
             h = bar.get_height()
             if h > 0:
-                ax1.annotate(f"{int(h)}", xy=(bar.get_x() + bar.get_width() / 2, h), xytext=(0, 3), textcoords="offset points", ha='center', va='bottom', fontsize=8.5, fontweight='bold')
+                ax1.annotate(f"{rate:.2f}%\n(n={cnt})", xy=(bar.get_x() + bar.get_width() / 2, h), xytext=(0, 3), textcoords="offset points", ha='center', va='bottom', fontsize=8.0, fontweight='bold')
 
-    ax1.set_title("Real Repeat Surgeries (REBUBBLING, WOUND_RESUTURING, KP)", fontsize=11, fontweight='bold', color=c_blue)
+    ax1.set_title("Identified Re-surgeries as % of Total Surgeries", fontsize=11, fontweight='bold', color=c_blue)
     ax1.set_xticks(x1)
     ax1.set_xticklabels(real_labels, fontsize=9.5, fontweight='bold')
-    ax1.set_ylabel("Number of Procedures", fontsize=9)
+    ax1.set_ylabel("Repeat Surgery Rate (%)", fontsize=9)
+    ax1.set_ylim(0, max([bar.get_height() for bar in ax1.patches] + [3]) * 1.35)
     ax1.legend(frameon=True, facecolor="#F8F9FA")
     ax1.grid(True, axis='y', linestyle="--", alpha=0.4)
 
-    # Right: Real Repeat Surgeries vs Others (Minor Procedures)
-    comp_labels = ["Real Repeat Surgeries", "Others (Minor)"]
-    x2 = np.arange(len(comp_labels))
+    # Right: Repeat Keratoplasty (KP) Rate by Campus (% of Campus Surgeries)
+    sub_kp_camp = df_rep_camp[df_rep_camp["Category"].str.contains("• KP")]
+    kp_campuses = sub_kp_camp["Campus"].tolist()
+    x2 = np.arange(len(kp_campuses))
 
     for idx, m in enumerate(months):
-        cnts = []
-        val_real = str(df_rep_ov.loc[df_rep_ov["Procedure Category"].str.startswith("Total Repeat Surgeries"), m].values[0])
-        m_real = int(re.match(r'(\d+)', val_real).group(1)) if re.match(r'(\d+)', val_real) else 0
-        cnts.append(m_real)
+        kp_rates = []
+        kp_counts = []
+        for c in kp_campuses:
+            tot_row = df_rep_camp[(df_rep_camp["Campus"] == c) & (df_rep_camp["Category"] == "Total Primary Surgeries")]
+            tot_val = tot_row[m].values[0] if len(tot_row) > 0 else 0
+            
+            kp_row = df_rep_camp[(df_rep_camp["Campus"] == c) & (df_rep_camp["Category"].str.contains("• KP"))]
+            kp_cnt = kp_row[m].values[0] if len(kp_row) > 0 else 0
+            try:
+                kp_cnt = int(kp_cnt)
+                tot_val = int(tot_val)
+                kp_rate = round(kp_cnt / tot_val * 100, 2) if tot_val > 0 else 0.0
+            except:
+                kp_cnt = 0
+                kp_rate = 0.0
+            kp_counts.append(kp_cnt)
+            kp_rates.append(kp_rate)
 
-        val_oth = str(df_rep_ov.loc[df_rep_ov["Procedure Category"].str.startswith("Others"), m].values[0])
-        m_oth = int(re.match(r'(\d+)', val_oth).group(1)) if re.match(r'(\d+)', val_oth) else 0
-        cnts.append(m_oth)
-
-        bars = ax2.bar(x2 + (idx - 1) * width, cnts, width, label=m, color=colors[idx % len(colors)], alpha=0.85)
-        for bar in bars:
+        bars2 = ax2.bar(x2 + (idx - 1) * width, kp_rates, width, label=m, color=colors[idx % len(colors)], alpha=0.85)
+        for bar, rate, cnt in zip(bars2, kp_rates, kp_counts):
             h = bar.get_height()
             if h > 0:
-                ax2.annotate(f"{int(h)}", xy=(bar.get_x() + bar.get_width() / 2, h), xytext=(0, 3), textcoords="offset points", ha='center', va='bottom', fontsize=8.5, fontweight='bold')
+                ax2.annotate(f"{rate:.2f}%\n(n={cnt})", xy=(bar.get_x() + bar.get_width() / 2, h), xytext=(0, 3), textcoords="offset points", ha='center', va='bottom', fontsize=8.0, fontweight='bold')
 
-    ax2.set_title("Real Repeat Surgeries vs. Others (Minor Procedures)", fontsize=11, fontweight='bold', color=c_blue)
+    ax2.set_title("Repeat Keratoplasty (KP) Rate by Campus (% of Campus Surgeries)", fontsize=11, fontweight='bold', color=c_blue)
     ax2.set_xticks(x2)
-    ax2.set_xticklabels(comp_labels, fontsize=9.5, fontweight='bold')
-    ax2.set_ylabel("Number of Procedures", fontsize=9)
+    ax2.set_xticklabels(kp_campuses, fontsize=9.5, fontweight='bold')
+    ax2.set_ylabel("Repeat KP Rate (%)", fontsize=9)
+    ax2.set_ylim(0, max([bar.get_height() for bar in ax2.patches] + [2]) * 1.35)
     ax2.legend(frameon=True, facecolor="#F8F9FA")
     ax2.grid(True, axis='y', linestyle="--", alpha=0.4)
 
@@ -1007,7 +1278,7 @@ def create_trend_pptx(trend_tables: dict[str, pd.DataFrame], month_names: list[s
     _style_pptx_slide_header(
         s6,
         "Graft Resurgery Rate by Primary Surgical Procedure (11–45 Days Post-Surgery)",
-        "Summary Scorecard & Surgical Procedure Risk Distribution"
+        "Re-surgeries shown as a proportion (%) of Total Surgeries for each Surgery Type"
     )
 
     fig, ax = plt.subplots(figsize=(11.5, 5.2), dpi=180)
@@ -1018,20 +1289,26 @@ def create_trend_pptx(trend_tables: dict[str, pd.DataFrame], month_names: list[s
 
     for idx, m in enumerate(months):
         rates = []
+        counts = []
         for val_str in sub_surg[m]:
-            match = re.search(r'\(([\d.]+)%\)', str(val_str))
-            rates.append(float(match.group(1)) if match else 0.0)
+            match = re.search(r'(\d+)\s*\(([\d.]+)%\)', str(val_str))
+            if match:
+                counts.append(int(match.group(1)))
+                rates.append(float(match.group(2)))
+            else:
+                counts.append(0)
+                rates.append(0.0)
         bars = ax.bar(x + (idx - 1) * width, rates, width, label=m, color=colors[idx % len(colors)], alpha=0.85)
-        for bar in bars:
+        for bar, rate, cnt in zip(bars, rates, counts):
             h = bar.get_height()
             if h > 0:
-                ax.annotate(f"{h:.1f}%", xy=(bar.get_x() + bar.get_width() / 2, h), xytext=(0, 3), textcoords="offset points", ha='center', va='bottom', fontsize=8, fontweight='bold')
+                ax.annotate(f"{h:.1f}%\n(n={cnt})", xy=(bar.get_x() + bar.get_width() / 2, h), xytext=(0, 3), textcoords="offset points", ha='center', va='bottom', fontsize=8.0, fontweight='bold')
 
-    ax.set_title("Real Repeat Surgery Rate by Procedure Group across 3 Months (Window: 11–45 Days)", fontsize=13, fontweight='bold', color=c_blue, pad=12)
+    ax.set_title("Real Repeat Surgery Rate by Surgical Procedure (% of Group Surgeries) [11–45 Days]", fontsize=13, fontweight='bold', color=c_blue, pad=12)
     ax.set_xticks(x)
     ax.set_xticklabels(procs_rep, fontsize=9.5, fontweight='bold', rotation=15)
-    ax.set_ylabel("Repeat Surgery Rate (%)", fontsize=10)
-    ax.set_ylim(0, max([bar.get_height() for bar in ax.patches] + [6]) * 1.3)
+    ax.set_ylabel("Repeat Surgery Rate (% of Procedure Surgeries)", fontsize=10)
+    ax.set_ylim(0, max([bar.get_height() for bar in ax.patches] + [6]) * 1.35)
     ax.legend(frameon=True, facecolor="#F8F9FA", loc="upper right")
     ax.grid(True, axis='y', linestyle="--", alpha=0.4)
 
@@ -2019,7 +2296,72 @@ if app_mode == "Single-Month Deep Analysis":
                 st.dataframe(excel_sheets["5_KP Details"], use_container_width=True)
 
         with preview_tabs[5]:
-            st.subheader("6 · Visual Acuity (LogMAR) Changes (non-THPK)")
+            st.subheader("6 · Visual Acuity & Visual Impairment Confusion Matrix (WHO Standard)")
+            st.info("ℹ️ **Clinical Note:** All vision impairment analyses strictly **exclude THPK** procedures as these are therapeutic/emergency interventions.")
+
+            va_pat_df = excel_sheets.get("6_VA Patient Detail", pd.DataFrame())
+
+            if len(va_pat_df) > 0:
+                st.markdown("#### 🎯 Interactive Drill-Down Filters")
+                col_c1, col_c2, col_c3 = st.columns(3)
+
+                camp_options = ["All"] + sorted([c for c in va_pat_df["sap_code"].dropna().unique() if str(c).strip() != ""])
+                with col_c1:
+                    sel_camp = st.selectbox("Select Campus", camp_options, index=0, key="va_drill_campus")
+
+                # Strictly exclude THPK from procedure options
+                proc_options = ["All"] + sorted([p for p in va_pat_df["surg_proc_group"].dropna().unique() if p != "THPK" and str(p).strip() != ""])
+                with col_c2:
+                    sel_proc = st.selectbox("Select Surgery Procedure", proc_options, index=0, key="va_drill_proc")
+
+                # Detect available follow-up periods in va_pat_df
+                avail_periods = [p for p in ["1M", "1W", "1D", "3M"] if f"{p.lower()}_logmar" in va_pat_df.columns]
+                if not avail_periods:
+                    avail_periods = ["1M"]
+                with col_c3:
+                    sel_period = st.selectbox(
+                        "Post-Operative Timepoint",
+                        avail_periods,
+                        index=0,
+                        format_func=lambda x: f"{x} Follow-Up (11–45 Days)" if x == "1M" else f"{x} Follow-Up",
+                        key="va_drill_period"
+                    )
+
+                post_col_name = f"{sel_period.lower()}_logmar"
+                cm_counts, cm_pct, stats = compute_vision_confusion_matrix(
+                    va_pat_df,
+                    pre_col="preop_logmar",
+                    post_col=post_col_name,
+                    campus=sel_camp,
+                    surg_proc=sel_proc
+                )
+
+                st.markdown(f"#### 📊 Visual Impairment Transition Summary ({sel_period} Post-Op vs. Pre-Op)")
+                m_c1, m_c2, m_c3, m_c4 = st.columns(4)
+                m_c1.metric("Evaluated Eyes (Paired)", f"{stats['total']:,}")
+                m_c2.metric("Vision Improved", f"{stats['improved']:,} ({stats['improved_pct']}%)")
+                m_c3.metric("Vision Stable", f"{stats['stable']:,} ({stats['stable_pct']}%)")
+                m_c4.metric("Vision Deteriorated", f"{stats['worsened']:,} ({stats['worsened_pct']}%)")
+
+                st.markdown(f"#### 🔲 Visual Impairment Confusion Matrix ({sel_period} Post-Op vs. Pre-Op)")
+                st.caption("Rows: Pre-Operative WHO Impairment Category | Columns: Post-Operative Category. Off-diagonal above/left = Improvement, Diagonal = Stable, Off-diagonal below/right = Deterioration.")
+
+                tab_mat1, tab_mat2 = st.tabs(["🔢 Matrix Table", "🎨 Visual Heatmap"])
+                with tab_mat1:
+                    st.dataframe(cm_counts, use_container_width=True)
+                    st.markdown("**Row Percentages (% of Pre-Op Cohort transitioning to Post-Op Category):**")
+                    st.dataframe(cm_pct.style.format("{:.1f}%"), use_container_width=True)
+
+                with tab_mat2:
+                    filter_lbl = f"[{sel_camp} Campus | {sel_proc} Surgery]"
+                    fig_cm = render_confusion_matrix_heatmap(
+                        cm_counts,
+                        title=f"Visual Impairment Confusion Matrix: Pre-op vs {sel_period} Post-op {filter_lbl}"
+                    )
+                    st.pyplot(fig_cm)
+                    plt.close(fig_cm)
+
+            st.markdown("---")
             st.markdown("#### Average LogMAR Improvement by Procedure")
             st.dataframe(excel_sheets["6_VA Avg by Proc"], use_container_width=True)
             st.markdown("#### Line Change Distribution")
@@ -2142,7 +2484,8 @@ else:
         t_tabs = st.tabs([
             "1. Overall Trends",
             "2. Campus Trends",
-            "3. Surgery Procedure Trends"
+            "3. Surgery Procedure Trends",
+            "4. Vision Confusion Matrix (11–45 Days)"
         ])
 
         with t_tabs[0]:
@@ -2165,3 +2508,70 @@ else:
             st.dataframe(trend_tables["3_Trend_Adherence_SurgType"], use_container_width=True)
             st.markdown("#### 1M Resurgery Rates & Category Breakdown by Surgery Procedure (Real vs Minor)")
             st.dataframe(trend_tables["6_Trend_Resurgery_SurgType"], use_container_width=True)
+
+        with t_tabs[3]:
+            st.subheader("4 · 1-Month Post-Op Visual Impairment Confusion Matrix (WHO Standard)")
+            st.info("ℹ️ **Clinical Note:** Evaluates Pre-op vs. 1-Month Post-op (11–45 Days). **THPK surgeries are strictly excluded** as therapeutic procedures.")
+
+            # Compile all VA records across months
+            all_va_trend = []
+            for m_lbl in active_labels:
+                m_va = month_results[m_lbl].get("va_summary", pd.DataFrame()).copy()
+                if len(m_va) > 0:
+                    m_va["Cohort_Month"] = m_lbl
+                    all_va_trend.append(m_va)
+            comb_va_trend = pd.concat(all_va_trend, ignore_index=True) if all_va_trend else pd.DataFrame()
+
+            if len(comb_va_trend) > 0:
+                st.markdown("#### 🎯 Interactive Drill-Down Filters")
+                tr_c1, tr_c2, tr_c3 = st.columns(3)
+
+                with tr_c1:
+                    m_opts = ["Pooled (All 3 Months)"] + active_labels
+                    sel_m = st.selectbox("Select Cohort Month", m_opts, index=0, key="tr_drill_month")
+
+                # Filter by month if not pooled
+                df_va_filtered = comb_va_trend if sel_m.startswith("Pooled") else comb_va_trend[comb_va_trend["Cohort_Month"] == sel_m]
+
+                with tr_c2:
+                    camp_opts = ["All"] + sorted([c for c in df_va_filtered["sap_code"].dropna().unique() if str(c).strip() != ""])
+                    sel_camp_tr = st.selectbox("Select Campus", camp_opts, index=0, key="tr_drill_campus")
+
+                with tr_c3:
+                    proc_opts = ["All"] + sorted([p for p in df_va_filtered["surg_proc_group"].dropna().unique() if p != "THPK" and str(p).strip() != ""])
+                    sel_proc_tr = st.selectbox("Select Surgery Procedure", proc_opts, index=0, key="tr_drill_proc")
+
+                tr_cm_counts, tr_cm_pct, tr_stats = compute_vision_confusion_matrix(
+                    df_va_filtered,
+                    pre_col="preop_logmar",
+                    post_col="1m_logmar",
+                    campus=sel_camp_tr,
+                    surg_proc=sel_proc_tr
+                )
+
+                st.markdown("#### 📊 Visual Impairment Transition Summary [11–45 Days Post-Op vs. Pre-Op]")
+                tm1, tm2, tm3, tm4 = st.columns(4)
+                tm1.metric("Evaluated Eyes (Paired)", f"{tr_stats['total']:,}")
+                tm2.metric("Vision Improved", f"{tr_stats['improved']:,} ({tr_stats['improved_pct']}%)")
+                tm3.metric("Vision Stable", f"{tr_stats['stable']:,} ({tr_stats['stable_pct']}%)")
+                tm4.metric("Vision Deteriorated", f"{tr_stats['worsened']:,} ({tr_stats['worsened_pct']}%)")
+
+                st.markdown("#### 🔲 Visual Impairment Confusion Matrix (WHO Classification)")
+                st.caption("Rows: Pre-Operative Impairment Category | Columns: 1-Month Post-Operative Category (11–45 Days). Excludes THPK.")
+
+                tab_tr_m1, tab_tr_m2 = st.tabs(["🔢 Matrix Table", "🎨 Visual Heatmap"])
+                with tab_tr_m1:
+                    st.dataframe(tr_cm_counts, use_container_width=True)
+                    st.markdown("**Row Percentages (% of Pre-Op Cohort transitioning to Post-Op Category):**")
+                    st.dataframe(tr_cm_pct.style.format("{:.1f}%"), use_container_width=True)
+
+                with tab_tr_m2:
+                    fltr_txt = f"[{sel_m} | {sel_camp_tr} Campus | {sel_proc_tr} Surgery]"
+                    fig_tr_cm = render_confusion_matrix_heatmap(
+                        tr_cm_counts,
+                        title=f"1M Visual Impairment Confusion Matrix (11–45d) {fltr_txt}"
+                    )
+                    st.pyplot(fig_tr_cm)
+                    plt.close(fig_tr_cm)
+            else:
+                st.warning("No paired visual acuity data available for the uploaded cohort.")
