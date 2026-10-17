@@ -743,6 +743,8 @@ def process_single_month(df: pd.DataFrame) -> dict:
     surgery_df['has_c_resurgery_1m'] = surgery_df['id'].isin(c_resurg_ids)
     surgery_df['has_evisc_thpk_1m'] = surgery_df['id'].isin(evisc_thpk_ids)
     surgery_df['has_any_reintervention_1m'] = surgery_df['id'].isin(any_reintervention_ids)
+    first_resurg_cat = repeat_1m.groupby('id')['Repeat_Category'].first()
+    surgery_df['resurg_category_1m'] = surgery_df['id'].map(first_resurg_cat).fillna('None')
 
     # Visual Acuity Summary (Strictly Exclude THPK)
     va_df = visit_df_primary[visit_df_primary['surg_proc_group'] != 'THPK'].copy()
