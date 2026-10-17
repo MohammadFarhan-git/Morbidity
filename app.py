@@ -112,16 +112,222 @@ VA_SPECIAL_MAP = {
     "PL+ PR INACCURATE": 2.7,
 }
 
-REPEAT_KP_PROCS = {
-    "THERAPUETIC PENETRATING KERATOPLASTY (TH PK)",
-    "INTRAOCULAR ANTIBIOTIC INJECTION (IOAB),THERAPUETIC PENETRATING KERATOPLASTY (TH PK)",
-    "DESCEMETS STRIPPING AUTOMATED ENDOTHELIAL KERATOPLASTY (DSAEK)",
-    "ANTERIOR VITRECTOMY,THERAPUETIC PENETRATING KERATOPLASTY (TH PK)",
-    "PENETRATING KERATOPLASTY (PK)",
-    "DESCEMET MEMBRANE ENDOTHLIAL KERATOPLASTY (DMEK)",
-    "ECCE + IOL,PENETRATING KERATOPLASTY (PK),TARSORRAPHY",
-    "DEEP ANTERIOR LAMELLAR KERATOPLASTY (DALK)",
+# ==============================================================================
+# Repeat Surgery Classification (3 Categories - Standard Option A)
+# ==============================================================================
+CAT_CORNEA = "C: Cornea Related Resurgery"
+CAT_KP = "KP: Keratoplasty Repeat"
+CAT_OTHERS = "Others: No Relevance to Primary Surgery"
+
+SURGERY_CATEGORY_MAP = {
+    'AC REFORMATION': CAT_CORNEA,
+    'AC REFORMATION,CORNEAL SCRAPING': CAT_CORNEA,
+    'AC REFORMATION,INTRAOCULAR ANTIBIOTIC INJECTION (IOAB)': CAT_CORNEA,
+    'AC REFORMATION,WOUND RESUTURING': CAT_CORNEA,
+    'AC WASH': CAT_CORNEA,
+    'AC WASH + INTRACAMERAL ANTIBIOTIC': CAT_CORNEA,
+    'AC WASH,CRYOPEXY RETINA IN MAIN OR,INTRAOCULAR ANTIBIOTIC INJECTION (IOAB)': CAT_CORNEA,
+    'AC WASH,INTRAOCULAR ANTIBIOTIC INJECTION (IOAB)': CAT_CORNEA,
+    'AC WASH,INTRAOCULAR ANTIBIOTIC INJECTION (IOAB),PARS PLANA VITRECTOMY (PPV)': CAT_CORNEA,
+    'AC WASH,INTRAOCULAR ANTIBIOTIC INJECTION (IOAB),PARS PLANA VITRECTOMY (PPV),TARSORRAPHY': CAT_CORNEA,
+    'AC WASH,INTRAOCULAR ANTIBIOTIC INJECTION (IOAB),PARS PLANA VITRECTOMY (PPV),WOUND RESUTURING': CAT_CORNEA,
+    'AC WASH,INTRAOCULAR ANTIBIOTIC INJECTION (IOAB),TARSORRAPHY': CAT_CORNEA,
+    'AC WASH,INTRAOCULAR ANTIBIOTIC INJECTION (IOAB),VITREOUS LAVAGE': CAT_CORNEA,
+    'AMNIOTIC MEMBRANE GRAFT': CAT_CORNEA,
+    'AMNIOTIC MEMBRANE GRAFT ,CORNEAL SCRAPING': CAT_CORNEA,
+    'AMNIOTIC MEMBRANE GRAFT ,TARSORRAPHY': CAT_CORNEA,
+    'AMNIOTIC MEMBRANE GRAFT ,TARSORRAPHY,TENONS PATCH GRAFT - LARGE': CAT_CORNEA,
+    'AMNIOTIC MEMBRANE GRAFT ,TARSORRAPHY,WOUND RESUTURING': CAT_CORNEA,
+    'AMNIOTIC MEMBRANE GRAFT ,TENONS PATCH GRAFT - LARGE': CAT_CORNEA,
+    'CORNEAL SCRAPING': CAT_CORNEA,
+    'CORNEAL SCRAPING + AC REFORMATION + GLUE + BCL,INTENSIVE MEDICAL CARE PER DAY,WOUND RESUTURING': CAT_CORNEA,
+    'CORNEAL SCRAPING + AC REFORMATION + GLUE + BCL,WOUND RESUTURING': CAT_CORNEA,
+    'CORNEAL SCRAPING + GLUE + BCL': CAT_CORNEA,
+    'CORNEAL SCRAPING,DEEP ANTERIOR LAMELLAR KERATOPLASTY (DALK)': CAT_CORNEA,
+    'CORNEAL SCRAPING,INTRAOCULAR ANTIBIOTIC INJECTION (IOAB),INTRASTROMAL INJ': CAT_CORNEA,
+    'CORNEAL SCRAPING,INTRAOCULAR ANTIBIOTIC INJECTION (IOAB),PARS PLANA VITRECTOMY (PPV)': CAT_CORNEA,
+    'CORNEAL SCRAPING,INTRASTROMAL INJ': CAT_CORNEA,
+    'CORNEAL SCRAPING,TARSORRAPHY': CAT_CORNEA,
+    'CORTICAL MATTER ASPIRATION': CAT_CORNEA,
+    'DESCMETOPEXY AIR': CAT_CORNEA,
+    'DESCMETOPEXY C3F8': CAT_CORNEA,
+    'DIAGNOSTIC AC TAP(INCLUDING MICRO WORK UP),INTRACAMERAL ANTIBIOTIC INJ': CAT_CORNEA,
+    'ENDOTHELIAL SCRAPING,INTRACAMERAL ANTIBIOTIC INJ,INTRASTROMAL INJ': CAT_CORNEA,
+    'EVISCERATION': CAT_CORNEA,
+    'GLUE + BCL': CAT_CORNEA,
+    'INTRACAMERAL ANTIBIOTIC INJ': CAT_CORNEA,
+    'INTRACAMERAL ANTIBIOTIC INJ,INTRASTROMAL INJ': CAT_CORNEA,
+    'INTRAOCULAR ANTIBIOTIC INJECTION (IOAB)': CAT_CORNEA,
+    'INTRAOCULAR ANTIBIOTIC INJECTION (IOAB),INTRASTROMAL INJ': CAT_CORNEA,
+    'INTRAOCULAR ANTIBIOTIC INJECTION (IOAB),INTRASTROMAL INJ,TARSORRAPHY': CAT_CORNEA,
+    'INTRAOCULAR ANTIBIOTIC INJECTION (IOAB),PARS PLANA VITRECTOMY (PPV)': CAT_CORNEA,
+    'INTRAOCULAR ANTIBIOTIC INJECTION (IOAB),WOUND RESUTURING': CAT_CORNEA,
+    'INTRASTROMAL INJ': CAT_CORNEA,
+    'INTRAVITREAL AMPHOTERICIN B INJECTION,PARS PLANA VITRECTOMY (PPV),SILICONE OIL INJECTION (SOI) 1000 CS': CAT_CORNEA,
+    'REBUBBLING': CAT_CORNEA,
+    'TARSORRAPHY': CAT_CORNEA,
+    'TENONS PATCH GRAFT - LARGE': CAT_CORNEA,
+    'WOUND EXPLORATION': CAT_CORNEA,
+    'WOUND RESUTURING': CAT_CORNEA,
+    'ALTK PER EYE': CAT_KP,
+    'ALTK PER EYE,DEEP ANTERIOR LAMELLAR KERATOPLASTY (DALK)': CAT_KP,
+    'ANTERIOR VITRECTOMY,CORNEAL SCRAPING,THERAPUETIC PENETRATING KERATOPLASTY (TH PK)': CAT_KP,
+    'ANTERIOR VITRECTOMY,DEEP ANTERIOR LAMELLAR KERATOPLASTY (DALK)': CAT_KP,
+    'ANTERIOR VITRECTOMY,DESCEMETS STRIPPING AUTOMATED ENDOTHELIAL KERATOPLASTY (DSAEK)': CAT_KP,
+    'ANTERIOR VITRECTOMY,ECCE + IOL,PENETRATING KERATOPLASTY (PK)': CAT_KP,
+    'ANTERIOR VITRECTOMY,IOL EXPLANTATION,PENETRATING KERATOPLASTY (PK)': CAT_KP,
+    'ANTERIOR VITRECTOMY,IOL EXPLANTATION,THERAPUETIC PENETRATING KERATOPLASTY (TH PK)': CAT_KP,
+    'ANTERIOR VITRECTOMY,IRIDECTOMY,THERAPUETIC PENETRATING KERATOPLASTY (TH PK)': CAT_KP,
+    'ANTERIOR VITRECTOMY,LENS ASPIRATION,THERAPUETIC PENETRATING KERATOPLASTY (TH PK)': CAT_KP,
+    'ANTERIOR VITRECTOMY,PENETRATING KERATOPLASTY (PK)': CAT_KP,
+    'ANTERIOR VITRECTOMY,PENETRATING KERATOPLASTY (PK),SICS + IOL': CAT_KP,
+    'ANTERIOR VITRECTOMY,PENETRATING KERATOPLASTY (PK),TARSORRAPHY': CAT_KP,
+    'ANTERIOR VITRECTOMY,THERAPUETIC PENETRATING KERATOPLASTY (TH PK)': CAT_KP,
+    'AURO KERATO PROSTHESIS': CAT_KP,
+    'BOSTON KERATO PROTHESIS': CAT_KP,
+    'CORNEAL PATCH GRAFT': CAT_KP,
+    'CORNEAL PATCH GRAFT,CORNEAL SCRAPING': CAT_KP,
+    'CORNEAL PATCH GRAFT,CORNEOSCLERAL TEAR REPAIR': CAT_KP,
+    'CORNEAL PATCH GRAFT,TARSORRAPHY': CAT_KP,
+    'CORNEAL SCRAPING,INTRAOCULAR ANTIBIOTIC INJECTION (IOAB),THERAPUETIC PENETRATING KERATOPLASTY (TH PK)': CAT_KP,
+    'CORNEAL SCRAPING,THERAPUETIC PENETRATING KERATOPLASTY (TH PK)': CAT_KP,
+    'DEEP ANTERIOR LAMELLAR KERATOPLASTY (DALK)': CAT_KP,
+    'DEEP ANTERIOR LAMELLAR KERATOPLASTY (DALK),DESCEMET MEMBRANE ENDOTHLIAL KERATOPLASTY (DMEK)': CAT_KP,
+    'DEEP ANTERIOR LAMELLAR KERATOPLASTY (DALK),IRIDOPLASTY,PUPILLOPLASTY': CAT_KP,
+    'DEEP ANTERIOR LAMELLAR KERATOPLASTY (DALK),PHACOEMULSIFICATION + FOLDABLE IOL(ASPHERIC)': CAT_KP,
+    'DEEP ANTERIOR LAMELLAR KERATOPLASTY (DALK),TARSORRAPHY': CAT_KP,
+    'DESCEMET MEMBRANE ENDOTHLIAL KERATOPLASTY (DMEK)': CAT_KP,
+    'DESCEMET MEMBRANE ENDOTHLIAL KERATOPLASTY (DMEK),ECCE': CAT_KP,
+    'DESCEMET MEMBRANE ENDOTHLIAL KERATOPLASTY (DMEK),PHACOEMULSIFICATION + FOLDABLE IOL(ASPHERIC)': CAT_KP,
+    'DESCEMET MEMBRANE ENDOTHLIAL KERATOPLASTY (DMEK),PHACOEMULSIFICATION + FOLDABLE IOL(NON-ASPHERIC)': CAT_KP,
+    'DESCEMET MEMBRANE ENDOTHLIAL KERATOPLASTY (DMEK),SECONDARY IOL': CAT_KP,
+    'DESCEMETS STRIPPING AUTOMATED ENDOTHELIAL KERATOPLASTY (DSAEK)': CAT_KP,
+    'DESCEMETS STRIPPING AUTOMATED ENDOTHELIAL KERATOPLASTY (DSAEK),ECCE + IOL': CAT_KP,
+    'DESCEMETS STRIPPING AUTOMATED ENDOTHELIAL KERATOPLASTY (DSAEK),GLUED INTRA OCULAR LENS': CAT_KP,
+    'DESCEMETS STRIPPING AUTOMATED ENDOTHELIAL KERATOPLASTY (DSAEK),IOL EXCHANGE': CAT_KP,
+    'DESCEMETS STRIPPING AUTOMATED ENDOTHELIAL KERATOPLASTY (DSAEK),IOL REPOSITION': CAT_KP,
+    'DESCEMETS STRIPPING AUTOMATED ENDOTHELIAL KERATOPLASTY (DSAEK),PHACOEMULSIFICATION + FOLDABLE IOL': CAT_KP,
+    'DESCEMETS STRIPPING AUTOMATED ENDOTHELIAL KERATOPLASTY (DSAEK),PHACOEMULSIFICATION + FOLDABLE IOL(ASPHERIC)': CAT_KP,
+    'DESCEMETS STRIPPING AUTOMATED ENDOTHELIAL KERATOPLASTY (DSAEK),PHACOEMULSIFICATION + FOLDABLE IOL(NON-ASPHERIC)': CAT_KP,
+    'DESCEMETS STRIPPING AUTOMATED ENDOTHELIAL KERATOPLASTY (DSAEK),SCLERAL FIXATED IOL': CAT_KP,
+    'DESCEMETS STRIPPING AUTOMATED ENDOTHELIAL KERATOPLASTY (DSAEK),SECONDARY IOL': CAT_KP,
+    'DESCEMETS STRIPPING AUTOMATED ENDOTHELIAL KERATOPLASTY (DSAEK),SICS + IOL': CAT_KP,
+    'DESCEMETS STRIPPING ENDOTHELIAL KERATOPLASTY (DSEK)': CAT_KP,
+    'ECCE + IOL,PENETRATING KERATOPLASTY (PK)': CAT_KP,
+    'ECCE + IOL,PENETRATING KERATOPLASTY (PK),TARSORRAPHY': CAT_KP,
+    'ECCE,PENETRATING KERATOPLASTY (PK)': CAT_KP,
+    'ECCE,THERAPUETIC PENETRATING KERATOPLASTY (TH PK)': CAT_KP,
+    'EPIKERATOPLASY': CAT_KP,
+    'FEMTOSECOND ASSISTED ANTERIOR LAMELLAR KERATOPLASTY (FALK)': CAT_KP,
+    'GLUED INTRA OCULAR LENS,PENETRATING KERATOPLASTY (PK)': CAT_KP,
+    'INTRAOCULAR ANTIBIOTIC INJECTION (IOAB),PARS PLANA VITRECTOMY (PPV),THERAPUETIC PENETRATING KERATOPLASTY (TH PK)': CAT_KP,
+    'INTRAOCULAR ANTIBIOTIC INJECTION (IOAB),THERAPUETIC PENETRATING KERATOPLASTY (TH PK)': CAT_KP,
+    'IOL EXPLANTATION,PENETRATING KERATOPLASTY (PK)': CAT_KP,
+    'IOL EXPLANTATION,THERAPUETIC PENETRATING KERATOPLASTY (TH PK)': CAT_KP,
+    'IRIDECTOMY,PENETRATING KERATOPLASTY (PK)': CAT_KP,
+    'IRIDECTOMY,THERAPUETIC PENETRATING KERATOPLASTY (TH PK)': CAT_KP,
+    'IRIDO-ZONULO-HYALOID-VITRECTOMY (IZHV),PENETRATING KERATOPLASTY (PK)': CAT_KP,
+    'IRIS FIXATED IOL,PENETRATING KERATOPLASTY (PK)': CAT_KP,
+    'LAMELLAR KERATOPLASTY': CAT_KP,
+    'LENS ASPIRATION + IOL,PENETRATING KERATOPLASTY (PK)': CAT_KP,
+    'LENS ASPIRATION,PENETRATING KERATOPLASTY (PK)': CAT_KP,
+    'LENS ASPIRATION,THERAPUETIC PENETRATING KERATOPLASTY (TH PK)': CAT_KP,
+    'LVP KERATO PROSTHESIS': CAT_KP,
+    'PARS PLANA VITRECTOMY (PPV),THERAPUETIC PENETRATING KERATOPLASTY (TH PK)': CAT_KP,
+    'PEDIATRIC PENETRATING KERATOPLASTY (AGE <12 YEARS)': CAT_KP,
+    'PENETRATING KERATOPLASTY (PK)': CAT_KP,
+    'PENETRATING KERATOPLASTY (PK),PHACOEMULSIFICATION + FOLDABLE IOL(ASPHERIC)': CAT_KP,
+    'PENETRATING KERATOPLASTY (PK),PHACOEMULSIFICATION + FOLDABLE IOL(NON-ASPHERIC)': CAT_KP,
+    'PENETRATING KERATOPLASTY (PK),PHACOEMULSIFICATION + NON-FOLDABLE IOL': CAT_KP,
+    'PENETRATING KERATOPLASTY (PK),PUPILLOPLASTY': CAT_KP,
+    'PENETRATING KERATOPLASTY (PK),SCLERAL FIXATED IOL': CAT_KP,
+    'PENETRATING KERATOPLASTY (PK),SECONDARY IOL': CAT_KP,
+    'PENETRATING KERATOPLASTY (PK),SICS + IOL': CAT_KP,
+    'PENETRATING KERATOPLASTY (PK),SYNECHIOLYSIS': CAT_KP,
+    'PENETRATING KERATOPLASTY (PK),TARSORRAPHY': CAT_KP,
+    'PENETRATING KERATOPLASTY (PK),TRABECULECTOMY + MMC': CAT_KP,
+    'PENETRATING KERATOPLASTY (PK),WOUND RESUTURING': CAT_KP,
+    'SCLERAL DEROOFING,THERAPUETIC PENETRATING KERATOPLASTY (TH PK)': CAT_KP,
+    'SYNECHIOLYSIS,THERAPUETIC PENETRATING KERATOPLASTY (TH PK)': CAT_KP,
+    'THERAPUETIC PENETRATING KERATOPLASTY (TH PK)': CAT_KP,
+    'THERAPUETIC PENETRATING KERATOPLASTY (TH PK),TRABECULECTOMY + MMC': CAT_KP,
+    'AHMED VALVE IMPLANT': CAT_OTHERS,
+    'AHMED VALVE TUBE TRIMMING': CAT_OTHERS,
+    'ANTERIOR VITRECTOMY': CAT_OTHERS,
+    'BCL LARGE DIAMETER': CAT_OTHERS,
+    'CONJUNCTIVAL AUTOGRAFT': CAT_OTHERS,
+    'CONJUNCTIVAL FOREIGN BODY REMOVAL': CAT_OTHERS,
+    'CONJUNCTIVOPLASTY': CAT_OTHERS,
+    'CORNEAL SUTURE REMOVAL': CAT_OTHERS,
+    'CORNEAL SUTURE REMOVAL,EXAMINATION UNDER ANESTHESIA,TARSORRAPHY': CAT_OTHERS,
+    'CORNEAL SUTURE REMOVAL,WOUND RESUTURING': CAT_OTHERS,
+    'CORNEOSCLERAL TEAR REPAIR': CAT_OTHERS,
+    'CRYOPEXY RETINA IN MAIN OR,PARS PLANA VITRECTOMY (PPV),SILICONE OIL INJECTION (SOI) 1000 CS': CAT_OTHERS,
+    'ECCE': CAT_OTHERS,
+    'ECCE + IOL': CAT_OTHERS,
+    'ELECTROLYSIS': CAT_OTHERS,
+    'ENDOLASER AS PART OF VR SURGERY,MEMBRANE PEELING (MP),PARS PLANA VITRECTOMY (PPV),PFCL INJECTION (PFCL)': CAT_OTHERS,
+    'ENDOLASER AS PART OF VR SURGERY,MEMBRANE PEELING (MP),PARS PLANA VITRECTOMY (PPV),SILICONE OIL INJECTION (SOI) 1000 CS': CAT_OTHERS,
+    'ENDOLASER AS PART OF VR SURGERY,MEMBRANE PEELING (MP),SILICONE OIL EXCHANGE (SOE)': CAT_OTHERS,
+    'ENDOLASER AS PART OF VR SURGERY,PARS PLANA LENSECTOMY (PPL),PARS PLANA VITRECTOMY (PPV),SILICONE OIL INJECTION (SOI) 1000 CS': CAT_OTHERS,
+    'ENDOLASER AS PART OF VR SURGERY,PARS PLANA VITRECTOMY (PPV),SILICONE OIL INJECTION (SOI) 1000 CS': CAT_OTHERS,
+    'ENDOLASER AS PART OF VR SURGERY,PARS PLANA VITRECTOMY (PPV),SILICONE OIL INJECTION (SOI) 5000 CS,TARSORRAPHY,VITREOUS BIOPSY + IOAB': CAT_OTHERS,
+    'ENDOSCOPIC PARS PLANA VITRECTOMY,INTRAOCULAR ANTIBIOTIC INJECTION (IOAB),SILICONE OIL INJECTION (SOI) 5000 CS': CAT_OTHERS,
+    'ENDOSCOPIC PARS PLANA VITRECTOMY,VITREOUS BIOPSY + IOAB': CAT_OTHERS,
+    'EVISCERATION + IMPLANT': CAT_OTHERS,
+    'EXAMINATION UNDER ANESTHESIA': CAT_OTHERS,
+    'EXAMINATION UNDER MICROSCOPE': CAT_OTHERS,
+    'EXCISION BIOPSY (LID) <30 MIN': CAT_OTHERS,
+    'EXCISION OF LIMBAL DERMOID + LAMELLAR KERATOPLASTY': CAT_OTHERS,
+    'FINE NEEDLE DIATHERMY': CAT_OTHERS,
+    'HP - HISTOPATHOLOGY SMALL': CAT_OTHERS,
+    'INTENSIVE MEDICAL CARE PER DAY': CAT_OTHERS,
+    'IOL EXCHANGE': CAT_OTHERS,
+    'IOL EXPLANTATION': CAT_OTHERS,
+    'IOL REPOSITION': CAT_OTHERS,
+    'IRIDECTOMY': CAT_OTHERS,
+    'LENS ASPIRATION': CAT_OTHERS,
+    'MEMBRANE PEELING (MP)': CAT_OTHERS,
+    'MEMBRANECTOMY (ANTERIOR SEGMENT),WOUND RESUTURING': CAT_OTHERS,
+    'MEMBRANOTOMY': CAT_OTHERS,
+    'MIGS- GONIOSCOPY-ASSISTED TRANSLUMINAL TRABECUOLOTOMY (GATT)': CAT_OTHERS,
+    'MMG-ONE EYELID': CAT_OTHERS,
+    'MONITORED ANESTHESIA CARE': CAT_OTHERS,
+    'PARS PLANA LENSECTOMY (PPL),PARS PLANA VITRECTOMY (PPV),SILICONE OIL INJECTION (SOI) 1000 CS': CAT_OTHERS,
+    'PARS PLANA TUBE (AGV)': CAT_OTHERS,
+    'PARS PLANA VITRECTOMY (PPV)': CAT_OTHERS,
+    'PARS PLANA VITRECTOMY (PPV),PPV + IOAB,SILICONE OIL INJECTION (SOI) 5000 CS': CAT_OTHERS,
+    'PARS PLANA VITRECTOMY (PPV),SILICONE OIL INJECTION (SOI) 1000 CS': CAT_OTHERS,
+    'PARS PLANA VITRECTOMY (PPV),SILICONE OIL INJECTION (SOI) 5000 CS': CAT_OTHERS,
+    'PARS PLANA VITRECTOMY (PPV),VITREOUS BIOPSY + IOAB': CAT_OTHERS,
+    'PFCL INJECTION (PFCL)': CAT_OTHERS,
+    'PHACOEMULSIFICATION + FOLDABLE IOL': CAT_OTHERS,
+    'PHACOEMULSIFICATION + FOLDABLE IOL(ASPHERIC)': CAT_OTHERS,
+    'PHACOEMULSIFICATION + FOLDABLE IOL(NON-ASPHERIC)': CAT_OTHERS,
+    'PHACOEMULSIFICATION + NON-FOLDABLE IOL': CAT_OTHERS,
+    'POSTERIOR SUB TENON TRICORT INJECTION': CAT_OTHERS,
+    'SCLERAL FIXATED IOL': CAT_OTHERS,
+    'SECONDARY IOL': CAT_OTHERS,
+    'SICS + IOL': CAT_OTHERS,
+    'SILICONE OIL EXCHANGE (SOE)': CAT_OTHERS,
+    'SILICONE OIL INJECTION (SOI) 1000 CS': CAT_OTHERS,
+    'SILICONE OIL INJECTION (SOI) 5000 CS': CAT_OTHERS,
+    'SIMPLE LIMBAL EPITHELIAL TRANSPLANT': CAT_OTHERS,
+    'SIMPLE LIMBAL EPITHELIAL TRANSPLANT,TARSORRAPHY': CAT_OTHERS,
+    'SUPERFICIAL KERATECTOMY': CAT_OTHERS,
+    'SYMBLEPHARON RELEASE': CAT_OTHERS,
+    'SYNECHIOLYSIS': CAT_OTHERS,
+    'TARSORRAPHY RELEASE': CAT_OTHERS,
+    'TRABECULECTOMY + MMC': CAT_OTHERS,
+    'TSCPC': CAT_OTHERS,
+    'TUBE LIGATURE - 15 MINS': CAT_OTHERS,
+    'TUBE REDIRECTION': CAT_OTHERS,
+    'VITREOUS BIOPSY + IOAB': CAT_OTHERS,
+    'VITREOUS LAVAGE': CAT_OTHERS,
 }
+
+SURGERY_CATEGORY_MAP_NORMALIZED = {k.strip().upper(): v for k, v in SURGERY_CATEGORY_MAP.items()}
+REPEAT_KP_PROCS = {k for k, v in SURGERY_CATEGORY_MAP.items() if v == CAT_KP}
 
 PREFIX_MAP = {"PN": "P", "NP": "N", "NPC": "CC", "PNC": "CC", "NPN": "N", "PNP": "P"}
 AGE_BINS   = [0, 18, 40, 60, 80, np.inf]
@@ -165,26 +371,16 @@ def correct_mrno(mrno) -> str:
 
 def categorize_repeat_surgery(proc_name, adv_proc_name=None) -> str:
     """
-    Categorizes post-op re-interventions into repeat surgery categories matching
-    morbidity_analysis_clean:
-      - REBUBBLING
-      - WOUND_RESUTURING
-      - KP (Repeat Keratoplasty procedures in REPEAT_KP_PROCS)
-      - Others (Minor procedures / supportive interventions)
-
-    Apart from Others, REBUBBLING, WOUND_RESUTURING, and KP are the real repeat surgeries.
+    Categorizes post-op re-interventions into 3 standardized categories (Option A):
+      - C: Cornea Related Resurgery (Rebubbling, Descematopexy, Resuturing, AMT, Glue+BCL, AC wash, etc.)
+      - KP: Keratoplasty Repeat (Repeat PK, DALK, DSAEK, DMEK, THPK, FALK, Patch graft, KPro, etc.)
+      - Others: No Relevance to Primary Surgery (Unrelated glaucoma, pure vitrectomy without graft, etc.)
     """
     name = proc_name if (pd.notna(proc_name) and str(proc_name).strip() != "") else adv_proc_name
     if pd.isna(name):
-        return "Others"
-    s = str(name).strip()
-    if s == "REBUBBLING":
-        return "REBUBBLING"
-    if s in ("WOUND RESUTURING", "WOUND_RESUTURING"):
-        return "WOUND_RESUTURING"
-    if s in REPEAT_KP_PROCS:
-        return "KP"
-    return "Others"
+        return CAT_OTHERS
+    s = str(name).strip().upper()
+    return SURGERY_CATEGORY_MAP_NORMALIZED.get(s, CAT_OTHERS)
 
 
 def build_va_logmar_dict(df: pd.DataFrame, va_cols: list[str]) -> dict:
@@ -518,20 +714,34 @@ def process_single_month(df: pd.DataFrame) -> dict:
         (visit_df_primary['fup_surg_done'] == 'YES')
     ].copy()
 
-    # Categorize procedures matching morbidity analysis clean logic
+    # Categorize procedures matching 3-category standard
     repeat_1m['Repeat_Category'] = [
         categorize_repeat_surgery(row.get('fup_done_surg_proc'), row.get('adv_surg_proc'))
         for _, row in repeat_1m.iterrows()
     ]
-    # Real repeat surgeries are REBUBBLING, WOUND_RESUTURING, KP (apart from Others)
-    repeat_1m['is_real_repeat'] = repeat_1m['Repeat_Category'].isin(['REBUBBLING', 'WOUND_RESUTURING', 'KP'])
+    # Cornea-related resurgeries are C (Cornea Related Resurgery) and KP (Keratoplasty Repeat)
+    repeat_1m['is_real_repeat'] = repeat_1m['Repeat_Category'].isin([CAT_CORNEA, CAT_KP])
     repeat_1m['is_graft_resurgery'] = repeat_1m['is_real_repeat']
+    repeat_1m['is_kp_repeat'] = repeat_1m['Repeat_Category'] == CAT_KP
+    repeat_1m['is_cornea_resurgery'] = repeat_1m['Repeat_Category'] == CAT_CORNEA
 
-    # Tag primary surgeries that had real repeat surgeries vs any re-intervention (including Others)
+    # Evisceration check (Mention separately for THPK)
+    evisc_mask = repeat_1m['fup_done_surg_proc'].fillna(repeat_1m.get('adv_surg_proc', '')).astype(str).str.strip().str.upper().str.contains("EVISCERATION")
+    repeat_1m['is_evisceration'] = evisc_mask
+    repeat_1m['is_evisceration_thpk'] = evisc_mask & (repeat_1m['surg_proc_group'] == 'THPK')
+
+    # Tag primary surgeries that had cornea resurgeries vs any re-intervention (including Others)
     real_resurg_ids = set(repeat_1m[repeat_1m['is_real_repeat']]['id'].unique())
+    kp_resurg_ids = set(repeat_1m[repeat_1m['is_kp_repeat']]['id'].unique())
+    c_resurg_ids = set(repeat_1m[repeat_1m['is_cornea_resurgery']]['id'].unique())
+    evisc_thpk_ids = set(repeat_1m[repeat_1m['is_evisceration_thpk']]['id'].unique())
     any_reintervention_ids = set(repeat_1m['id'].unique())
+
     surgery_df['has_graft_resurgery_1m'] = surgery_df['id'].isin(real_resurg_ids)
     surgery_df['has_repeat_surgery_1m'] = surgery_df['id'].isin(real_resurg_ids)
+    surgery_df['has_kp_resurgery_1m'] = surgery_df['id'].isin(kp_resurg_ids)
+    surgery_df['has_c_resurgery_1m'] = surgery_df['id'].isin(c_resurg_ids)
+    surgery_df['has_evisc_thpk_1m'] = surgery_df['id'].isin(evisc_thpk_ids)
     surgery_df['has_any_reintervention_1m'] = surgery_df['id'].isin(any_reintervention_ids)
 
     # Visual Acuity Summary (Strictly Exclude THPK)
@@ -643,17 +853,17 @@ def build_3month_trend_tables(month_results: dict[str, dict]) -> dict[str, pd.Da
         "Trend (M3 vs M1)": tot_surg[m3] - tot_surg[m1]
     })
 
-    # Section 2: Real Repeat Surgeries (REBUBBLING, WOUND_RESUTURING, KP)
-    real_cats = ["REBUBBLING", "WOUND_RESUTURING", "KP"]
+    # Section 2: Cornea-Related Resurgeries (C + KP)
+    real_cats = [CAT_CORNEA, CAT_KP]
     
-    # Total Real Repeat Surgeries
+    # Total Cornea-Related Resurgeries
     g_resurg_cnt = {m: month_results[m]["surgery_df"]["has_graft_resurgery_1m"].sum() for m in month_keys}
     g_resurg_pct = {m: round(g_resurg_cnt[m] / tot_surg[m] * 100, 2) if tot_surg[m] > 0 else 0.0 for m in month_keys}
     p_g_cnt = sum(g_resurg_cnt.values())
     p_g_pct = round(p_g_cnt / pooled_surg * 100, 2) if pooled_surg > 0 else 0.0
 
     t4_rows.append({
-        "Procedure Category": "Total Repeat Surgeries (Real: Rebubbling, Resuturing, KP) [11–45 Days]",
+        "Procedure Category": "Total Cornea-Related Resurgeries (C + KP) [11–45 Days]",
         m1: f"{g_resurg_cnt[m1]} ({g_resurg_pct[m1]}%)",
         m2: f"{g_resurg_cnt[m2]} ({g_resurg_pct[m2]}%)",
         m3: f"{g_resurg_cnt[m3]} ({g_resurg_pct[m3]}%)",
@@ -676,18 +886,37 @@ def build_3month_trend_tables(month_results: dict[str, dict]) -> dict[str, pd.Da
         r["Trend (M3 vs M1)"] = f"{m3_cnt - m1_cnt:+d}"
         t4_rows.append(r)
 
-    # Section 3: Others (Minor Procedures)
-    r_oth = {"Procedure Category": "Others (Minor Procedures)"}
+    # Special callout for EVISCERATION following THPK
+    evisc_cnt = {}
+    for m in month_keys:
+        reps = month_results[m]["repeat_1m"]
+        cnt = reps[
+            (reps["surg_proc_group"] == "THPK") &
+            (reps["fup_done_surg_proc"].fillna("").astype(str).str.strip().str.upper().str.contains("EVISCERATION"))
+        ].shape[0]
+        evisc_cnt[m] = cnt
+    p_evisc = sum(evisc_cnt.values())
+    t4_rows.append({
+        "Procedure Category": "    - of which: Evisceration (following THPK)",
+        m1: f"{evisc_cnt[m1]}",
+        m2: f"{evisc_cnt[m2]}",
+        m3: f"{evisc_cnt[m3]}",
+        "3-Month Total": f"{p_evisc}",
+        "Trend (M3 vs M1)": f"{evisc_cnt[m3] - evisc_cnt[m1]:+d}"
+    })
+
+    # Section 3: Others: No Relevance to Primary Surgery
+    r_oth = {"Procedure Category": f"  • {CAT_OTHERS}"}
     p_oth_cnt = 0
     for m in month_keys:
         reps = month_results[m]["repeat_1m"]
-        cnt = (reps["Repeat_Category"] == "Others").sum()
+        cnt = (reps["Repeat_Category"] == CAT_OTHERS).sum()
         pct = round(cnt / tot_surg[m] * 100, 2) if tot_surg[m] > 0 else 0.0
         r_oth[m] = f"{cnt} ({pct}%)"
         p_oth_cnt += cnt
     r_oth["3-Month Total"] = f"{p_oth_cnt} ({round(p_oth_cnt / pooled_surg * 100, 2)}%)"
-    m1_oth_cnt = (month_results[m1]["repeat_1m"]["Repeat_Category"] == "Others").sum()
-    m3_oth_cnt = (month_results[m3]["repeat_1m"]["Repeat_Category"] == "Others").sum()
+    m1_oth_cnt = (month_results[m1]["repeat_1m"]["Repeat_Category"] == CAT_OTHERS).sum()
+    m3_oth_cnt = (month_results[m3]["repeat_1m"]["Repeat_Category"] == CAT_OTHERS).sum()
     r_oth["Trend (M3 vs M1)"] = f"{m3_oth_cnt - m1_oth_cnt:+d}"
     t4_rows.append(r_oth)
 
@@ -727,14 +956,14 @@ def build_3month_trend_tables(month_results: dict[str, dict]) -> dict[str, pd.Da
                 "Trend (M3 vs M1)": tot_s[m3] - tot_s[m1]
             })
 
-            # 2. Total Real Repeat Surgeries
+            # 2. Total Cornea-Related Resurgeries (C + KP)
             real_cnt = {m: month_results[m]["surgery_df"][(month_results[m]["surgery_df"][group_col] == g) & (month_results[m]["surgery_df"]["has_graft_resurgery_1m"])].shape[0] for m in month_keys}
             pool_real = sum(real_cnt.values())
             pcts = {m: round(real_cnt[m] / tot_s[m] * 100, 2) if tot_s[m] > 0 else 0.0 for m in month_keys}
             p_pct = round(pool_real / pool_s * 100, 2) if pool_s > 0 else 0.0
             rows.append({
                 group_label: g,
-                "Category": "  Total Real Repeat Surgeries (Rebubbling, Resuturing, KP)",
+                "Category": "  Total Cornea-Related Resurgeries (C + KP)",
                 m1: f"{real_cnt[m1]} ({pcts[m1]}%)",
                 m2: f"{real_cnt[m2]} ({pcts[m2]}%)",
                 m3: f"{real_cnt[m3]} ({pcts[m3]}%)",
@@ -742,8 +971,8 @@ def build_3month_trend_tables(month_results: dict[str, dict]) -> dict[str, pd.Da
                 "Trend (M3 vs M1)": f"{pcts[m3] - pcts[m1]:+.2f}%"
             })
 
-            # 3. Specific Real Repeat Categories: REBUBBLING, WOUND_RESUTURING, KP
-            for sub in ["REBUBBLING", "WOUND_RESUTURING", "KP"]:
+            # 3. Specific Categories: C and KP
+            for sub in [CAT_CORNEA, CAT_KP]:
                 cnts = {m: month_results[m]["repeat_1m"][(month_results[m]["repeat_1m"][group_col] == g) & (month_results[m]["repeat_1m"]["Repeat_Category"] == sub)].shape[0] for m in month_keys}
                 p_cnt = sum(cnts.values())
                 rows.append({
@@ -754,14 +983,14 @@ def build_3month_trend_tables(month_results: dict[str, dict]) -> dict[str, pd.Da
                     "Trend (M3 vs M1)": cnts[m3] - cnts[m1]
                 })
 
-            # 4. Others (Minor Procedures)
-            oth_cnt = {m: month_results[m]["repeat_1m"][(month_results[m]["repeat_1m"][group_col] == g) & (month_results[m]["repeat_1m"]["Repeat_Category"] == "Others")].shape[0] for m in month_keys}
+            # 4. Others: No Relevance to Primary Surgery
+            oth_cnt = {m: month_results[m]["repeat_1m"][(month_results[m]["repeat_1m"][group_col] == g) & (month_results[m]["repeat_1m"]["Repeat_Category"] == CAT_OTHERS)].shape[0] for m in month_keys}
             p_oth = sum(oth_cnt.values())
             oth_pcts = {m: round(oth_cnt[m] / tot_s[m] * 100, 2) if tot_s[m] > 0 else 0.0 for m in month_keys}
             p_oth_pct = round(p_oth / pool_s * 100, 2) if pool_s > 0 else 0.0
             rows.append({
                 group_label: g,
-                "Category": "  Others (Minor Procedures)",
+                "Category": f"  {CAT_OTHERS}",
                 m1: f"{oth_cnt[m1]} ({oth_pcts[m1]}%)",
                 m2: f"{oth_cnt[m2]} ({oth_pcts[m2]}%)",
                 m3: f"{oth_cnt[m3]} ({oth_pcts[m3]}%)",
@@ -1021,8 +1250,8 @@ def create_trend_pptx(trend_tables: dict[str, pd.DataFrame], month_names: list[s
     adh_rate_str = str(df_adh_ov.loc[df_adh_ov["Metric"] == "1M Adherence Rate (11–45 Days) [%]", "3-Month Total"].values[0])
     adh_delta_str = str(df_adh_ov.loc[df_adh_ov["Metric"] == "1M Adherence Rate (11–45 Days) [%]", "Trend (M3 - M1)"].values[0])
 
-    graft_resurg_val = str(df_rep_ov.loc[df_rep_ov["Procedure Category"].str.startswith("Total Repeat Surgeries"), "3-Month Total"].values[0])
-    kp_resurg_val = str(df_rep_ov.loc[df_rep_ov["Procedure Category"] == "  • KP", "3-Month Total"].values[0])
+    graft_resurg_val = str(df_rep_ov.loc[df_rep_ov["Procedure Category"].str.startswith("Total Cornea-Related Resurgeries"), "3-Month Total"].values[0])
+    kp_resurg_val = str(df_rep_ov.loc[df_rep_ov["Procedure Category"].str.contains("KP: Keratoplasty Repeat"), "3-Month Total"].values[0])
 
     card_w = Inches(2.8)
     card_h = Inches(1.3)
@@ -1030,8 +1259,8 @@ def create_trend_pptx(trend_tables: dict[str, pd.DataFrame], month_names: list[s
 
     _add_kpi_card(s1, Inches(0.6), top_pos, card_w, card_h, "3-Month Primary Surgeries", tot_surg_str, f"Across {m1}, {m2}, {m3}", RGBColor(31, 78, 120))
     _add_kpi_card(s1, Inches(3.7), top_pos, card_w, card_h, "1M Adherence Rate (11–45d)", adh_rate_str, f"3-Month Pooled (Trend: {adh_delta_str})", RGBColor(39, 174, 96))
-    _add_kpi_card(s1, Inches(6.8), top_pos, card_w, card_h, "1M Identified Resurgeries", graft_resurg_val, "Rebubbling, Resuturing, KP", RGBColor(192, 57, 43))
-    _add_kpi_card(s1, Inches(9.9), top_pos, card_w, card_h, "1M Repeat Keratoplasty (KP)", kp_resurg_val, "Specific Repeat KP / Graft Replacement", RGBColor(142, 68, 173))
+    _add_kpi_card(s1, Inches(6.8), top_pos, card_w, card_h, "1M Cornea Resurgeries", graft_resurg_val, "Cornea (C) + Repeat KP", RGBColor(192, 57, 43))
+    _add_kpi_card(s1, Inches(9.9), top_pos, card_w, card_h, "1M Repeat Keratoplasty (KP)", kp_resurg_val, "Specific Repeat KP / Replacement", RGBColor(142, 68, 173))
 
     # Dual Chart Overview (Adherence vs Repeat Surgery Rate)
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11.5, 4.0), dpi=180)
@@ -1049,7 +1278,7 @@ def create_trend_pptx(trend_tables: dict[str, pd.DataFrame], month_names: list[s
     g_resurg_counts = []
     g_tot_surgs = []
     for m in months:
-        val_str = str(df_rep_ov.loc[df_rep_ov["Procedure Category"].str.startswith("Total Repeat Surgeries"), m].values[0])
+        val_str = str(df_rep_ov.loc[df_rep_ov["Procedure Category"].str.startswith("Total Cornea-Related Resurgeries"), m].values[0])
         match = re.search(r'(\d+)\s*\(([\d.]+)%\)', val_str)
         if match:
             cnt = int(match.group(1))
@@ -1067,8 +1296,8 @@ def create_trend_pptx(trend_tables: dict[str, pd.DataFrame], month_names: list[s
     ax2.plot(months, g_resurg_rates, marker='s', linewidth=3, markersize=8, color=c_red)
     for i, (v, cnt, tot) in enumerate(zip(g_resurg_rates, g_resurg_counts, g_tot_surgs)):
         ax2.annotate(f"{v:.2f}%\n({cnt}/{tot})", (months[i], v), textcoords="offset points", xytext=(0, 8), ha='center', fontweight='bold', fontsize=8.5, color=c_red)
-    ax2.set_title("1-Month Repeat Surgery Rate (%) [11–45 Days]", fontsize=11, fontweight='bold', color=c_blue)
-    ax2.set_ylabel("Repeat Surgery Rate (%)", fontsize=9)
+    ax2.set_title("1-Month Cornea Resurgery Rate (%) [11–45 Days]", fontsize=11, fontweight='bold', color=c_blue)
+    ax2.set_ylabel("Resurgery Rate (%)", fontsize=9)
     ax2.set_ylim(0, max(g_resurg_rates + [5]) * 1.45)
     ax2.grid(True, linestyle="--", alpha=0.4)
 
@@ -1149,17 +1378,17 @@ def create_trend_pptx(trend_tables: dict[str, pd.DataFrame], month_names: list[s
     s3.shapes.add_picture(img_buf, Inches(0.8), Inches(1.4), Inches(11.7), Inches(5.6))
 
     # ─────────────────────────────────────────────────────────────
-    # SLIDE 4: 1-Month Graft Resurgery Rate (11–45 Days) — Campus Trends
+    # SLIDE 4: 1-Month Cornea Resurgery Rate (11–45 Days) — Campus Trends
     # ─────────────────────────────────────────────────────────────
     s4 = prs.slides.add_slide(blank_layout)
     _style_pptx_slide_header(
         s4,
-        "1-Month Graft Resurgery Rate by Campus (11–45 Days Post-Surgery)",
-        "Re-surgeries shown as a proportion (%) of Total Surgeries for each Campus (Rebubbling, Resuturing, KP)"
+        "1-Month Cornea Resurgery Rate by Campus (11–45 Days Post-Surgery)",
+        "Re-surgeries shown as a proportion (%) of Total Surgeries for each Campus (Cornea Related C + KP)"
     )
 
     fig, ax = plt.subplots(figsize=(11.5, 5.2), dpi=180)
-    sub_camp = df_rep_camp[df_rep_camp["Category"].str.contains("Total Real Repeat")]
+    sub_camp = df_rep_camp[df_rep_camp["Category"].str.contains("Total Cornea-Related Resurgeries")]
     campuses_rep = sub_camp["Campus"].tolist()
     x = np.arange(len(campuses_rep))
     width = 0.25
@@ -1191,10 +1420,10 @@ def create_trend_pptx(trend_tables: dict[str, pd.DataFrame], month_names: list[s
             if h > 0:
                 ax.annotate(f"{rate:.1f}%\n({cnt}/{tot})", xy=(bar.get_x() + bar.get_width() / 2, h), xytext=(0, 3), textcoords="offset points", ha='center', va='bottom', fontsize=7.5, fontweight='bold')
 
-    ax.set_title("Real Repeat Surgery Rate by Campus (% of Total Campus Surgeries) [11–45 Days]", fontsize=13, fontweight='bold', color=c_blue, pad=12)
+    ax.set_title("Cornea-Related Resurgery Rate by Campus (% of Total Campus Surgeries) [11–45 Days]", fontsize=13, fontweight='bold', color=c_blue, pad=12)
     ax.set_xticks(x)
     ax.set_xticklabels(campuses_rep, fontsize=10, fontweight='bold')
-    ax.set_ylabel("Repeat Surgery Rate (% of Campus Surgeries)", fontsize=10)
+    ax.set_ylabel("Resurgery Rate (% of Campus Surgeries)", fontsize=10)
     ax.set_ylim(0, max([bar.get_height() for bar in ax.patches] + [6]) * 1.40)
     ax.legend(frameon=True, facecolor="#F8F9FA", loc="upper right")
     ax.grid(True, axis='y', linestyle="--", alpha=0.4)
@@ -1212,14 +1441,14 @@ def create_trend_pptx(trend_tables: dict[str, pd.DataFrame], month_names: list[s
     s5 = prs.slides.add_slide(blank_layout)
     _style_pptx_slide_header(
         s5,
-        "Repeat Surgery Rates by Specific Identified Category (11–45 Days Post-Surgery)",
-        "Proportions (%) of Total Primary Surgeries: Rebubbling, Wound Resuturing, and Repeat Keratoplasty (KP)"
+        "Resurgery Rates by Category (11–45 Days Post-Surgery)",
+        "Proportions (%) of Total Primary Surgeries: Cornea Related Resurgery (C) vs Repeat Keratoplasty (KP)"
     )
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11.5, 4.8), dpi=180)
     
     # Left: Specific Identified Re-surgeries as % of Total Primary Surgeries
-    real_labels = ["REBUBBLING", "WOUND_RESUTURING", "KP"]
+    real_labels = [CAT_CORNEA, CAT_KP]
     x1 = np.arange(len(real_labels))
     width = 0.25
 
@@ -1249,16 +1478,16 @@ def create_trend_pptx(trend_tables: dict[str, pd.DataFrame], month_names: list[s
             if h > 0:
                 ax1.annotate(f"{rate:.2f}%\n({cnt}/{tot})", xy=(bar.get_x() + bar.get_width() / 2, h), xytext=(0, 3), textcoords="offset points", ha='center', va='bottom', fontsize=7.5, fontweight='bold')
 
-    ax1.set_title("Identified Re-surgeries as % of Total Surgeries", fontsize=11, fontweight='bold', color=c_blue)
+    ax1.set_title("Cornea Resurgeries vs Repeat KP (% of Total Surgeries)", fontsize=11, fontweight='bold', color=c_blue)
     ax1.set_xticks(x1)
-    ax1.set_xticklabels(real_labels, fontsize=9.5, fontweight='bold')
-    ax1.set_ylabel("Repeat Surgery Rate (%)", fontsize=9)
+    ax1.set_xticklabels(["C: Cornea Related\nResurgery", "KP: Keratoplasty\nRepeat"], fontsize=9.5, fontweight='bold')
+    ax1.set_ylabel("Resurgery Rate (%)", fontsize=9)
     ax1.set_ylim(0, max([bar.get_height() for bar in ax1.patches] + [3]) * 1.40)
     ax1.legend(frameon=True, facecolor="#F8F9FA")
     ax1.grid(True, axis='y', linestyle="--", alpha=0.4)
 
     # Right: Repeat Keratoplasty (KP) Rate by Campus (% of Campus Surgeries)
-    sub_kp_camp = df_rep_camp[df_rep_camp["Category"].str.contains("• KP")]
+    sub_kp_camp = df_rep_camp[df_rep_camp["Category"].str.contains("KP: Keratoplasty Repeat")]
     kp_campuses = sub_kp_camp["Campus"].tolist()
     x2 = np.arange(len(kp_campuses))
 
@@ -1270,7 +1499,7 @@ def create_trend_pptx(trend_tables: dict[str, pd.DataFrame], month_names: list[s
             tot_row = df_rep_camp[(df_rep_camp["Campus"] == c) & (df_rep_camp["Category"] == "Total Primary Surgeries")]
             tot_val = tot_row[m].values[0] if len(tot_row) > 0 else 0
             
-            kp_row = df_rep_camp[(df_rep_camp["Campus"] == c) & (df_rep_camp["Category"].str.contains("• KP"))]
+            kp_row = df_rep_camp[(df_rep_camp["Campus"] == c) & (df_rep_camp["Category"].str.contains("KP: Keratoplasty Repeat"))]
             kp_cnt = kp_row[m].values[0] if len(kp_row) > 0 else 0
             try:
                 kp_cnt = int(kp_cnt)
@@ -1311,12 +1540,12 @@ def create_trend_pptx(trend_tables: dict[str, pd.DataFrame], month_names: list[s
     s6 = prs.slides.add_slide(blank_layout)
     _style_pptx_slide_header(
         s6,
-        "Graft Resurgery Rate by Primary Surgical Procedure (11–45 Days Post-Surgery)",
-        "Re-surgeries shown as a proportion (%) of Total Surgeries for each Surgery Type"
+        "Cornea Resurgery Rate by Primary Surgical Procedure (11–45 Days Post-Surgery)",
+        "Re-surgeries shown as a proportion (%) of Total Surgeries for each Surgery Type (C + KP)"
     )
 
     fig, ax = plt.subplots(figsize=(11.5, 5.2), dpi=180)
-    sub_surg = df_rep_surg[df_rep_surg["Category"].str.contains("Total Real Repeat")]
+    sub_surg = df_rep_surg[df_rep_surg["Category"].str.contains("Total Cornea-Related Resurgeries")]
     procs_rep = sub_surg["Surgery Procedure"].tolist()
     x = np.arange(len(procs_rep))
     width = 0.25
@@ -1348,10 +1577,10 @@ def create_trend_pptx(trend_tables: dict[str, pd.DataFrame], month_names: list[s
             if h > 0:
                 ax.annotate(f"{rate:.1f}%\n({cnt}/{tot})", xy=(bar.get_x() + bar.get_width() / 2, h), xytext=(0, 3), textcoords="offset points", ha='center', va='bottom', fontsize=7.5, fontweight='bold')
 
-    ax.set_title("Real Repeat Surgery Rate by Surgical Procedure (% of Group Surgeries) [11–45 Days]", fontsize=13, fontweight='bold', color=c_blue, pad=12)
+    ax.set_title("Cornea Resurgery Rate by Surgical Procedure (% of Group Surgeries) [11–45 Days]", fontsize=13, fontweight='bold', color=c_blue, pad=12)
     ax.set_xticks(x)
     ax.set_xticklabels(procs_rep, fontsize=9.5, fontweight='bold', rotation=15)
-    ax.set_ylabel("Repeat Surgery Rate (% of Procedure Surgeries)", fontsize=10)
+    ax.set_ylabel("Resurgery Rate (% of Procedure Surgeries)", fontsize=10)
     ax.set_ylim(0, max([bar.get_height() for bar in ax.patches] + [6]) * 1.40)
     ax.legend(frameon=True, facecolor="#F8F9FA", loc="upper right")
     ax.grid(True, axis='y', linestyle="--", alpha=0.4)
@@ -2046,7 +2275,7 @@ def run_analysis_pipeline(df_raw: pd.DataFrame):
         repeat_summary["Repeat %"] = (repeat_summary["Overall"] / repeat_summary["Total Primary"] * 100).round(2)
 
     kp_details = (
-        repeat_df[repeat_df["Repeat_Category"] == "Repeat Keratoplasty (KP)"]
+        repeat_df[repeat_df["Repeat_Category"] == CAT_KP]
         .groupby(["surg_proc_group", "fup_done_surg_proc"]).size()
         .reset_index(name="Count")
         .sort_values(["surg_proc_group", "Count"], ascending=[True, False])
@@ -2054,15 +2283,31 @@ def run_analysis_pipeline(df_raw: pd.DataFrame):
 
     kp_cols = [c for c in ["tp_mrno_corrected", "id", "surg_proc_group", "fup_done_surg_proc", "days_after_surgery", "visit_date"] if c in repeat_df.columns]
     kp_patients = (
-        repeat_df[repeat_df["Repeat_Category"] == "Repeat Keratoplasty (KP)"]
+        repeat_df[repeat_df["Repeat_Category"] == CAT_KP]
         [kp_cols]
         .sort_values(["surg_proc_group", "fup_done_surg_proc", "tp_mrno_corrected"])
     )
+
+    c_details = (
+        repeat_df[repeat_df["Repeat_Category"] == CAT_CORNEA]
+        .groupby(["surg_proc_group", "fup_done_surg_proc"]).size()
+        .reset_index(name="Count")
+        .sort_values(["surg_proc_group", "Count"], ascending=[True, False])
+    )
+
+    evisc_cols = [c for c in ["tp_mrno_corrected", "id", "surg_proc_group", "fup_done_surg_proc", "days_after_surgery", "visit_date"] if c in repeat_df.columns]
+    evisc_thpk = repeat_df[
+        (repeat_df["surg_proc_group"] == "THPK") &
+        (repeat_df["fup_done_surg_proc"].fillna("").astype(str).str.strip().str.upper().str.contains("EVISCERATION"))
+    ][evisc_cols].drop_duplicates()
 
     EXCEL_SHEETS["5_Repeat Overall"]   = overall_repeat
     EXCEL_SHEETS["5_Repeat by Surg"]   = repeat_summary
     EXCEL_SHEETS["5_KP Details"]       = kp_details
     EXCEL_SHEETS["5_KP Patients"]      = kp_patients
+    EXCEL_SHEETS["5_Cornea Resurg Details"] = c_details
+    if len(evisc_thpk) > 0:
+        EXCEL_SHEETS["5_Evisceration THPK"] = evisc_thpk
 
     # ── Analysis 6: Visual Acuity (VA) Change ──
     VA_df = visit_df_primary[visit_df_primary['surg_proc_group'] != 'THPK'].copy()
@@ -2336,8 +2581,15 @@ if app_mode == "Single-Month Deep Analysis":
                 st.markdown("#### Overall Repeat Categories")
                 st.dataframe(excel_sheets["5_Repeat Overall"], use_container_width=True)
             with col_r2:
-                st.markdown("#### Keratoplasty (KP) Repeat Details")
+                st.markdown("#### Repeat Keratoplasty (KP) Details")
                 st.dataframe(excel_sheets["5_KP Details"], use_container_width=True)
+
+            st.markdown("#### Cornea-Related Resurgery (C) Details")
+            st.dataframe(excel_sheets.get("5_Cornea Resurg Details", pd.DataFrame()), use_container_width=True)
+
+            if "5_Evisceration THPK" in excel_sheets and len(excel_sheets["5_Evisceration THPK"]) > 0:
+                st.warning(f"⚠️ **Evisceration following THPK:** {len(excel_sheets['5_Evisceration THPK'])} case(s) recorded.")
+                st.dataframe(excel_sheets["5_Evisceration THPK"], use_container_width=True)
 
         with preview_tabs[5]:
             st.subheader("6 · Visual Acuity & Visual Impairment Confusion Matrix (WHO Standard)")
@@ -2441,7 +2693,7 @@ else:
         This mode analyzes 3 consecutive months to track:
         1. **1-Month Follow-Up Adherence Trends** (Overall, by Campus, by Surgery Procedure).
         2. **1-Month Resurgery Rate Trends** (Overall, by Campus, by Surgery Procedure).
-        3. **Resurgery Category Breakdown Trends** (Rebubbling, Wound Resuturing, KP, Others).
+        3. **Resurgery Category Breakdown Trends** (Cornea Related [C], Repeat Keratoplasty [KP], Others [No Relevance]).
         
         **Outputs Generated:**
         - 📥 **Executive Excel Workbook** (`3_Month_Trends_Results.xlsx`) with 6 formatted trend sheets.
