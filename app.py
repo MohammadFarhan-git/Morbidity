@@ -2268,13 +2268,19 @@ def run_analysis_pipeline(df_raw: pd.DataFrame):
         repeat_df.groupby(["surg_proc_group", "Repeat_Category"]).size()
         .unstack(fill_value=0)
     )
-    repeat_summary["Overall"] = repeat_summary.sum(axis=1)
+    for cat in [CAT_CORNEA, CAT_KP, CAT_OTHERS]:
+        if cat not in repeat_summary.columns:
+            repeat_summary[cat] = 0
+    repeat_summary = repeat_summary[[CAT_CORNEA, CAT_KP, CAT_OTHERS]]
+    repeat_summary["Total Re-interventions"] = repeat_summary.sum(axis=1)
     repeat_summary = repeat_summary.reset_index()
 
     if not adherence_df.empty and "surg_proc_group" in adherence_df.columns:
         primary_counts = adherence_df.groupby("surg_proc_group").size()
         repeat_summary["Total Primary"] = repeat_summary["surg_proc_group"].map(primary_counts)
-        repeat_summary["Repeat %"] = (repeat_summary["Overall"] / repeat_summary["Total Primary"] * 100).round(2)
+        repeat_summary["Repeat KP %"] = (repeat_summary[CAT_KP] / repeat_summary["Total Primary"] * 100).round(2)
+        repeat_summary["Cornea Resurg %"] = (repeat_summary[CAT_CORNEA] / repeat_summary["Total Primary"] * 100).round(2)
+        repeat_summary["Total Re-intervention %"] = (repeat_summary["Total Re-interventions"] / repeat_summary["Total Primary"] * 100).round(2)
 
     kp_details = (
         repeat_df[repeat_df["Repeat_Category"] == CAT_KP]
@@ -2585,6 +2591,9 @@ if app_mode == "Single-Month Deep Analysis":
             with col_r2:
                 st.markdown("#### Repeat Keratoplasty (KP) Details")
                 st.dataframe(excel_sheets["5_KP Details"], use_container_width=True)
+
+            st.markdown("#### Repeat Summary by Primary Surgery Type")
+            st.dataframe(excel_sheets["5_Repeat by Surg"], use_container_width=True)
 
             st.markdown("#### Cornea-Related Resurgery (C) Details")
             st.dataframe(excel_sheets.get("5_Cornea Resurg Details", pd.DataFrame()), use_container_width=True)
