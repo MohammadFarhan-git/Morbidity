@@ -734,6 +734,7 @@ def process_single_month(df: pd.DataFrame) -> dict:
     real_resurg_ids = set(repeat_1m[repeat_1m['is_real_repeat']]['id'].unique())
     kp_resurg_ids = set(repeat_1m[repeat_1m['is_kp_repeat']]['id'].unique())
     c_resurg_ids = set(repeat_1m[repeat_1m['is_cornea_resurgery']]['id'].unique())
+    others_resurg_ids = set(repeat_1m[repeat_1m['Repeat_Category'] == CAT_OTHERS]['id'].unique())
     evisc_thpk_ids = set(repeat_1m[repeat_1m['is_evisceration_thpk']]['id'].unique())
     any_reintervention_ids = set(repeat_1m['id'].unique())
 
@@ -741,6 +742,7 @@ def process_single_month(df: pd.DataFrame) -> dict:
     surgery_df['has_repeat_surgery_1m'] = surgery_df['id'].isin(real_resurg_ids)
     surgery_df['has_kp_resurgery_1m'] = surgery_df['id'].isin(kp_resurg_ids)
     surgery_df['has_c_resurgery_1m'] = surgery_df['id'].isin(c_resurg_ids)
+    surgery_df['has_others_reintervention_1m'] = surgery_df['id'].isin(others_resurg_ids)
     surgery_df['has_evisc_thpk_1m'] = surgery_df['id'].isin(evisc_thpk_ids)
     surgery_df['has_any_reintervention_1m'] = surgery_df['id'].isin(any_reintervention_ids)
     first_resurg_cat = repeat_1m.groupby('id')['Repeat_Category'].first()
@@ -873,29 +875,30 @@ def build_3month_trend_tables(month_results: dict[str, dict]) -> dict[str, pd.Da
         "Trend (M3 vs M1)": f"{g_resurg_pct[m3] - g_resurg_pct[m1]:+.2f}%"
     })
 
-    for cat in real_cats:
+    cat_flags = [
+        (CAT_CORNEA, "has_c_resurgery_1m"),
+        (CAT_KP, "has_kp_resurgery_1m")
+    ]
+    for cat, flag_col in cat_flags:
         r = {"Procedure Category": f"  • {cat}"}
         p_cnt = 0
         for m in month_keys:
-            reps = month_results[m]["repeat_1m"]
-            cnt = (reps["Repeat_Category"] == cat).sum()
+            msurg = month_results[m]["surgery_df"]
+            cnt = msurg[flag_col].sum()
             pct = round(cnt / tot_surg[m] * 100, 2) if tot_surg[m] > 0 else 0.0
             r[m] = f"{cnt} ({pct}%)"
             p_cnt += cnt
         r["3-Month Total"] = f"{p_cnt} ({round(p_cnt / pooled_surg * 100, 2)}%)"
-        m1_cnt = (month_results[m1]["repeat_1m"]["Repeat_Category"] == cat).sum()
-        m3_cnt = (month_results[m3]["repeat_1m"]["Repeat_Category"] == cat).sum()
+        m1_cnt = month_results[m1]["surgery_df"][flag_col].sum()
+        m3_cnt = month_results[m3]["surgery_df"][flag_col].sum()
         r["Trend (M3 vs M1)"] = f"{m3_cnt - m1_cnt:+d}"
         t4_rows.append(r)
 
     # Special callout for EVISCERATION following THPK
     evisc_cnt = {}
     for m in month_keys:
-        reps = month_results[m]["repeat_1m"]
-        cnt = reps[
-            (reps["surg_proc_group"] == "THPK") &
-            (reps["fup_done_surg_proc"].fillna("").astype(str).str.strip().str.upper().str.contains("EVISCERATION"))
-        ].shape[0]
+        msurg = month_results[m]["surgery_df"]
+        cnt = msurg["has_evisc_thpk_1m"].sum() if "has_evisc_thpk_1m" in msurg.columns else 0
         evisc_cnt[m] = cnt
     p_evisc = sum(evisc_cnt.values())
     t4_rows.append({
@@ -911,19 +914,19 @@ def build_3month_trend_tables(month_results: dict[str, dict]) -> dict[str, pd.Da
     r_oth = {"Procedure Category": f"  • {CAT_OTHERS}"}
     p_oth_cnt = 0
     for m in month_keys:
-        reps = month_results[m]["repeat_1m"]
-        cnt = (reps["Repeat_Category"] == CAT_OTHERS).sum()
+        msurg = month_results[m]["surgery_df"]
+        cnt = msurg["has_others_reintervention_1m"].sum()
         pct = round(cnt / tot_surg[m] * 100, 2) if tot_surg[m] > 0 else 0.0
         r_oth[m] = f"{cnt} ({pct}%)"
         p_oth_cnt += cnt
     r_oth["3-Month Total"] = f"{p_oth_cnt} ({round(p_oth_cnt / pooled_surg * 100, 2)}%)"
-    m1_oth_cnt = (month_results[m1]["repeat_1m"]["Repeat_Category"] == CAT_OTHERS).sum()
-    m3_oth_cnt = (month_results[m3]["repeat_1m"]["Repeat_Category"] == CAT_OTHERS).sum()
+    m1_oth_cnt = month_results[m1]["surgery_df"]["has_others_reintervention_1m"].sum()
+    m3_oth_cnt = month_results[m3]["surgery_df"]["has_others_reintervention_1m"].sum()
     r_oth["Trend (M3 vs M1)"] = f"{m3_oth_cnt - m1_oth_cnt:+d}"
     t4_rows.append(r_oth)
 
     # Section 4: All Re-interventions Combined (Real + Others)
-    all_re_cnt = {m: len(month_results[m]["repeat_1m"]) for m in month_keys}
+    all_re_cnt = {m: month_results[m]["surgery_df"]["has_any_reintervention_1m"].sum() for m in month_keys}
     p_all_re = sum(all_re_cnt.values())
     t4_rows.append({
         "Procedure Category": "Total Combined Re-interventions (All Procedures)",
@@ -974,19 +977,23 @@ def build_3month_trend_tables(month_results: dict[str, dict]) -> dict[str, pd.Da
             })
 
             # 3. Specific Categories: C and KP
-            for sub in [CAT_CORNEA, CAT_KP]:
-                cnts = {m: month_results[m]["repeat_1m"][(month_results[m]["repeat_1m"][group_col] == g) & (month_results[m]["repeat_1m"]["Repeat_Category"] == sub)].shape[0] for m in month_keys}
+            for sub, flag_col in [(CAT_CORNEA, "has_c_resurgery_1m"), (CAT_KP, "has_kp_resurgery_1m")]:
+                cnts = {m: month_results[m]["surgery_df"][(month_results[m]["surgery_df"][group_col] == g) & (month_results[m]["surgery_df"][flag_col])].shape[0] for m in month_keys}
                 p_cnt = sum(cnts.values())
+                sub_pcts = {m: round(cnts[m] / tot_s[m] * 100, 2) if tot_s[m] > 0 else 0.0 for m in month_keys}
+                p_sub_pct = round(p_cnt / pool_s * 100, 2) if pool_s > 0 else 0.0
                 rows.append({
                     group_label: g,
                     "Category": f"    • {sub}",
-                    m1: cnts[m1], m2: cnts[m2], m3: cnts[m3],
-                    "3-Month Total": p_cnt,
-                    "Trend (M3 vs M1)": cnts[m3] - cnts[m1]
+                    m1: f"{cnts[m1]} ({sub_pcts[m1]}%)",
+                    m2: f"{cnts[m2]} ({sub_pcts[m2]}%)",
+                    m3: f"{cnts[m3]} ({sub_pcts[m3]}%)",
+                    "3-Month Total": f"{p_cnt} ({p_sub_pct}%)",
+                    "Trend (M3 vs M1)": f"{cnts[m3] - cnts[m1]:+d}"
                 })
 
             # 4. Others: No Relevance to Primary Surgery
-            oth_cnt = {m: month_results[m]["repeat_1m"][(month_results[m]["repeat_1m"][group_col] == g) & (month_results[m]["repeat_1m"]["Repeat_Category"] == CAT_OTHERS)].shape[0] for m in month_keys}
+            oth_cnt = {m: month_results[m]["surgery_df"][(month_results[m]["surgery_df"][group_col] == g) & (month_results[m]["surgery_df"]["has_others_reintervention_1m"])].shape[0] for m in month_keys}
             p_oth = sum(oth_cnt.values())
             oth_pcts = {m: round(oth_cnt[m] / tot_s[m] * 100, 2) if tot_s[m] > 0 else 0.0 for m in month_keys}
             p_oth_pct = round(p_oth / pool_s * 100, 2) if pool_s > 0 else 0.0
@@ -1001,7 +1008,7 @@ def build_3month_trend_tables(month_results: dict[str, dict]) -> dict[str, pd.Da
             })
 
             # 5. Total Combined Re-interventions
-            all_re = {m: month_results[m]["repeat_1m"][month_results[m]["repeat_1m"][group_col] == g].shape[0] for m in month_keys}
+            all_re = {m: month_results[m]["surgery_df"][(month_results[m]["surgery_df"][group_col] == g) & (month_results[m]["surgery_df"]["has_any_reintervention_1m"])].shape[0] for m in month_keys}
             p_all = sum(all_re.values())
             all_pcts = {m: round(all_re[m] / tot_s[m] * 100, 2) if tot_s[m] > 0 else 0.0 for m in month_keys}
             p_all_pct = round(p_all / pool_s * 100, 2) if pool_s > 0 else 0.0
@@ -1502,15 +1509,19 @@ def create_trend_pptx(trend_tables: dict[str, pd.DataFrame], month_names: list[s
             tot_val = tot_row[m].values[0] if len(tot_row) > 0 else 0
             
             kp_row = df_rep_camp[(df_rep_camp["Campus"] == c) & (df_rep_camp["Category"].str.contains("KP: Keratoplasty Repeat"))]
-            kp_cnt = kp_row[m].values[0] if len(kp_row) > 0 else 0
-            try:
-                kp_cnt = int(kp_cnt)
-                tot_val = int(tot_val)
-                kp_rate = round(kp_cnt / tot_val * 100, 2) if tot_val > 0 else 0.0
-            except:
-                kp_cnt = 0
-                tot_val = 0
-                kp_rate = 0.0
+            kp_val_str = str(kp_row[m].values[0]) if len(kp_row) > 0 and pd.notna(kp_row[m].values[0]) else ""
+            match = re.search(r'(\d+)\s*\(([\d.]+)%\)', kp_val_str)
+            if match:
+                kp_cnt = int(match.group(1))
+                kp_rate = float(match.group(2))
+            else:
+                try:
+                    kp_cnt = int(kp_val_str)
+                    tot_val = int(tot_val)
+                    kp_rate = round(kp_cnt / tot_val * 100, 2) if tot_val > 0 else 0.0
+                except:
+                    kp_cnt = 0
+                    kp_rate = 0.0
             kp_counts.append(kp_cnt)
             kp_totals.append(tot_val)
             kp_rates.append(kp_rate)
