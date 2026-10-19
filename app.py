@@ -259,8 +259,8 @@ SURGERY_CATEGORY_MAP = {
     'CONJUNCTIVAL FOREIGN BODY REMOVAL': CAT_OTHERS,
     'CONJUNCTIVOPLASTY': CAT_OTHERS,
     'CORNEAL SUTURE REMOVAL': CAT_OTHERS,
-    'CORNEAL SUTURE REMOVAL,EXAMINATION UNDER ANESTHESIA,TARSORRAPHY': CAT_OTHERS,
-    'CORNEAL SUTURE REMOVAL,WOUND RESUTURING': CAT_OTHERS,
+    'CORNEAL SUTURE REMOVAL,EXAMINATION UNDER ANESTHESIA,TARSORRAPHY': CAT_CORNEA,
+    'CORNEAL SUTURE REMOVAL,WOUND RESUTURING': CAT_CORNEA,
     'CORNEOSCLERAL TEAR REPAIR': CAT_OTHERS,
     'CRYOPEXY RETINA IN MAIN OR,PARS PLANA VITRECTOMY (PPV),SILICONE OIL INJECTION (SOI) 1000 CS': CAT_OTHERS,
     'ECCE': CAT_OTHERS,
@@ -274,11 +274,11 @@ SURGERY_CATEGORY_MAP = {
     'ENDOLASER AS PART OF VR SURGERY,PARS PLANA VITRECTOMY (PPV),SILICONE OIL INJECTION (SOI) 5000 CS,TARSORRAPHY,VITREOUS BIOPSY + IOAB': CAT_OTHERS,
     'ENDOSCOPIC PARS PLANA VITRECTOMY,INTRAOCULAR ANTIBIOTIC INJECTION (IOAB),SILICONE OIL INJECTION (SOI) 5000 CS': CAT_OTHERS,
     'ENDOSCOPIC PARS PLANA VITRECTOMY,VITREOUS BIOPSY + IOAB': CAT_OTHERS,
-    'EVISCERATION + IMPLANT': CAT_OTHERS,
+    'EVISCERATION + IMPLANT': CAT_CORNEA,
     'EXAMINATION UNDER ANESTHESIA': CAT_OTHERS,
     'EXAMINATION UNDER MICROSCOPE': CAT_OTHERS,
     'EXCISION BIOPSY (LID) <30 MIN': CAT_OTHERS,
-    'EXCISION OF LIMBAL DERMOID + LAMELLAR KERATOPLASTY': CAT_OTHERS,
+    'EXCISION OF LIMBAL DERMOID + LAMELLAR KERATOPLASTY': CAT_KP,
     'FINE NEEDLE DIATHERMY': CAT_OTHERS,
     'HP - HISTOPATHOLOGY SMALL': CAT_OTHERS,
     'INTENSIVE MEDICAL CARE PER DAY': CAT_OTHERS,
@@ -288,7 +288,7 @@ SURGERY_CATEGORY_MAP = {
     'IRIDECTOMY': CAT_OTHERS,
     'LENS ASPIRATION': CAT_OTHERS,
     'MEMBRANE PEELING (MP)': CAT_OTHERS,
-    'MEMBRANECTOMY (ANTERIOR SEGMENT),WOUND RESUTURING': CAT_OTHERS,
+    'MEMBRANECTOMY (ANTERIOR SEGMENT),WOUND RESUTURING': CAT_CORNEA,
     'MEMBRANOTOMY': CAT_OTHERS,
     'MIGS- GONIOSCOPY-ASSISTED TRANSLUMINAL TRABECUOLOTOMY (GATT)': CAT_OTHERS,
     'MMG-ONE EYELID': CAT_OTHERS,
@@ -313,7 +313,7 @@ SURGERY_CATEGORY_MAP = {
     'SILICONE OIL INJECTION (SOI) 1000 CS': CAT_OTHERS,
     'SILICONE OIL INJECTION (SOI) 5000 CS': CAT_OTHERS,
     'SIMPLE LIMBAL EPITHELIAL TRANSPLANT': CAT_OTHERS,
-    'SIMPLE LIMBAL EPITHELIAL TRANSPLANT,TARSORRAPHY': CAT_OTHERS,
+    'SIMPLE LIMBAL EPITHELIAL TRANSPLANT,TARSORRAPHY': CAT_CORNEA,
     'SUPERFICIAL KERATECTOMY': CAT_OTHERS,
     'SYMBLEPHARON RELEASE': CAT_OTHERS,
     'SYNECHIOLYSIS': CAT_OTHERS,
@@ -330,7 +330,7 @@ SURGERY_CATEGORY_MAP_NORMALIZED = {k.strip().upper(): v for k, v in SURGERY_CATE
 REPEAT_KP_PROCS = {k for k, v in SURGERY_CATEGORY_MAP.items() if v == CAT_KP}
 
 PREFIX_MAP = {"PN": "P", "NP": "N", "NPC": "CC", "PNC": "CC", "NPN": "N", "PNP": "P"}
-AGE_BINS   = [0, 18, 40, 60, 80, np.inf]
+AGE_BINS   = [-1, 18, 40, 60, 80, np.inf]
 AGE_LABELS = ["<18yr", "18-40yr", "41-60yr", "61-80yr", "80+yr"]
 
 # ==============================================================================
@@ -380,7 +380,23 @@ def categorize_repeat_surgery(proc_name, adv_proc_name=None) -> str:
     if pd.isna(name):
         return CAT_OTHERS
     s = str(name).strip().upper()
-    return SURGERY_CATEGORY_MAP_NORMALIZED.get(s, CAT_OTHERS)
+    if s in SURGERY_CATEGORY_MAP_NORMALIZED:
+        return SURGERY_CATEGORY_MAP_NORMALIZED[s]
+
+    # Keyword fallback matching to prevent unmapped clinical procedures defaulting to Others
+    kp_kw = ["KERATOPLASTY", "DSAEK", "DMEK", "DALK", "THPK", "PK ", "PK,", "(PK)", "PATCH GRAFT", "KPRO", "KERATO PROSTHESIS"]
+    if any(k in s for k in kp_kw):
+        return CAT_KP
+
+    cornea_kw = [
+        "REBUBBL", "RESUTUR", "DESCMETOPEXY", "DESCEMETOPEXY", "AC WASH", "AC REFORMATION",
+        "GLUE", "BCL", "TARSORRAPHY", "EVISCERATION", "SCRAPING", "AMNIOTIC", "SLET",
+        "INTRACAMERAL", "IOAB"
+    ]
+    if any(k in s for k in cornea_kw):
+        return CAT_CORNEA
+
+    return CAT_OTHERS
 
 
 def build_va_logmar_dict(df: pd.DataFrame, va_cols: list[str]) -> dict:
@@ -696,7 +712,7 @@ def process_single_month(df: pd.DataFrame) -> dict:
     visit_df = df.merge(repeat_dates, on='id', how='left')
     visit_df_primary = visit_df[
         visit_df['first_repeat_keratoplasty_date'].isna() |
-        (visit_df['visit_date'] < visit_df['first_repeat_keratoplasty_date'])
+        (visit_df['visit_date'] <= visit_df['first_repeat_keratoplasty_date'])
     ].copy()
 
     # One row per primary surgery
@@ -730,13 +746,13 @@ def process_single_month(df: pd.DataFrame) -> dict:
     repeat_1m['is_evisceration'] = evisc_mask
     repeat_1m['is_evisceration_thpk'] = evisc_mask & (repeat_1m['surg_proc_group'] == 'THPK')
 
-    # Tag primary surgeries that had cornea resurgeries vs any re-intervention (including Others)
-    real_resurg_ids = set(repeat_1m[repeat_1m['is_real_repeat']]['id'].unique())
+    # Tag primary surgeries that had cornea resurgeries vs any re-intervention (hierarchical mutual exclusivity)
     kp_resurg_ids = set(repeat_1m[repeat_1m['is_kp_repeat']]['id'].unique())
-    c_resurg_ids = set(repeat_1m[repeat_1m['is_cornea_resurgery']]['id'].unique())
-    others_resurg_ids = set(repeat_1m[repeat_1m['Repeat_Category'] == CAT_OTHERS]['id'].unique())
+    c_resurg_ids = set(repeat_1m[repeat_1m['is_cornea_resurgery']]['id'].unique()) - kp_resurg_ids
+    real_resurg_ids = kp_resurg_ids | c_resurg_ids
+    others_resurg_ids = set(repeat_1m[repeat_1m['Repeat_Category'] == CAT_OTHERS]['id'].unique()) - real_resurg_ids
     evisc_thpk_ids = set(repeat_1m[repeat_1m['is_evisceration_thpk']]['id'].unique())
-    any_reintervention_ids = set(repeat_1m['id'].unique())
+    any_reintervention_ids = real_resurg_ids | others_resurg_ids
 
     surgery_df['has_graft_resurgery_1m'] = surgery_df['id'].isin(real_resurg_ids)
     surgery_df['has_repeat_surgery_1m'] = surgery_df['id'].isin(real_resurg_ids)
@@ -745,15 +761,23 @@ def process_single_month(df: pd.DataFrame) -> dict:
     surgery_df['has_others_reintervention_1m'] = surgery_df['id'].isin(others_resurg_ids)
     surgery_df['has_evisc_thpk_1m'] = surgery_df['id'].isin(evisc_thpk_ids)
     surgery_df['has_any_reintervention_1m'] = surgery_df['id'].isin(any_reintervention_ids)
-    first_resurg_cat = repeat_1m.groupby('id')['Repeat_Category'].first()
-    surgery_df['resurg_category_1m'] = surgery_df['id'].map(first_resurg_cat).fillna('None')
+    
+    def _resurg_cat(sid):
+        if sid in kp_resurg_ids:
+            return CAT_KP
+        elif sid in c_resurg_ids:
+            return CAT_CORNEA
+        elif sid in others_resurg_ids:
+            return CAT_OTHERS
+        return 'None'
+    surgery_df['resurg_category_1m'] = surgery_df['id'].map(_resurg_cat)
 
     # Visual Acuity Summary (Strictly Exclude THPK)
     va_df = visit_df_primary[visit_df_primary['surg_proc_group'] != 'THPK'].copy()
     if "best_va_logmar" in va_df.columns:
         preop_b = va_df[va_df["visit_date"] < va_df["surg_date"]].sort_values(["id", "visit_date"]).groupby("id").tail(1)[["id", "best_va_logmar"]].rename(columns={"best_va_logmar": "preop_logmar"})
         preop_s = va_df[va_df["visit_date"] == va_df["surg_date"]].sort_values(["id", "visit_date"]).groupby("id").tail(1)[["id", "best_va_logmar"]].rename(columns={"best_va_logmar": "preop_logmar"})
-        preop = preop_b.combine_first(preop_s.set_index("id")).reset_index()
+        preop = preop_b.set_index("id").combine_first(preop_s.set_index("id")).reset_index()
 
         fup_1m_va = va_df[va_df["days_after_surgery"].between(11, 45) & va_df["best_va_logmar"].notna()].sort_values(["id", "visit_date"]).groupby("id").tail(1)[["id", "best_va_logmar"]].rename(columns={"best_va_logmar": "1m_logmar"})
 
@@ -1605,6 +1629,28 @@ def create_trend_pptx(trend_tables: dict[str, pd.DataFrame], month_names: list[s
     img_buf.seek(0)
     s6.shapes.add_picture(img_buf, Inches(0.8), Inches(1.4), Inches(11.7), Inches(5.6))
 
+    # ─────────────────────────────────────────────────────────────
+    # SLIDE 7: Visual Impairment Confusion Matrix (WHO Standard, Strictly Non-THPK)
+    # ─────────────────────────────────────────────────────────────
+    s7 = prs.slides.add_slide(blank_layout)
+    _style_pptx_slide_header(
+        s7,
+        "Pre-op vs. Post-op Visual Impairment Transition Matrix (WHO Standard)",
+        "Paired Visual Acuity Transitions at 1-Month Follow-Up (11–45 Days) — Strictly Excluding THPK"
+    )
+    if "7_Trend_VA_Confusion_Matrix" in trend_tables:
+        df_cm_raw = trend_tables["7_Trend_VA_Confusion_Matrix"]
+        if "Pre-op Category (WHO Standard)" in df_cm_raw.columns:
+            df_cm_indexed = df_cm_raw.set_index("Pre-op Category (WHO Standard)")
+        else:
+            df_cm_indexed = df_cm_raw
+        fig_cm = render_confusion_matrix_heatmap(df_cm_indexed, title="3-Month Pooled Pre vs. Post Visual Impairment (WHO Standard)")
+        img_buf_cm = io.BytesIO()
+        fig_cm.savefig(img_buf_cm, format='png', dpi=180)
+        plt.close(fig_cm)
+        img_buf_cm.seek(0)
+        s7.shapes.add_picture(img_buf_cm, Inches(2.5), Inches(1.4), Inches(8.3), Inches(5.6))
+
     output = io.BytesIO()
     prs.save(output)
     output.seek(0)
@@ -2141,7 +2187,7 @@ def run_analysis_pipeline(df_raw: pd.DataFrame):
 
     visit_df_primary = visit_df[
         visit_df['first_repeat_keratoplasty_date'].isna() |
-        (visit_df['visit_date'] < visit_df['first_repeat_keratoplasty_date'])
+        (visit_df['visit_date'] <= visit_df['first_repeat_keratoplasty_date'])
     ].copy()
 
     surgery_df = visit_df_primary.groupby('id', as_index=False).first()
@@ -2373,7 +2419,7 @@ def run_analysis_pipeline(df_raw: pd.DataFrame):
 
     preop_before   = _latest_va(VA_df, VA_df["visit_date"] < VA_df["surg_date"], "preop")
     preop_same_day = _latest_va(VA_df, VA_df["visit_date"] == VA_df["surg_date"], "preop")
-    preop = preop_before.combine_first(preop_same_day.set_index("id")).reset_index()
+    preop = preop_before.set_index("id").combine_first(preop_same_day.set_index("id")).reset_index()
 
     base = VA_df.groupby("id").first().reset_index()
     keep = [c for c in ["id", "sap_code", "tp_mrno_corrected", "tp_mrno", "gender", "sub_category", "surg_date", "surg_eye", "surg_proc_group", "surgeon_name"] if c in base.columns]
