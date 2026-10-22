@@ -2502,13 +2502,20 @@ def run_analysis_pipeline(df_raw: pd.DataFrame):
         beautify_workbook(writer.book)
     output_buffer.seek(0)
 
+    surg_month_tag = None
+    if 'surg_date' in surgery_df.columns:
+        valid_s = pd.to_datetime(surgery_df['surg_date'], errors='coerce').dropna()
+        if not valid_s.empty:
+            surg_month_tag = valid_s.dt.strftime('%b%Y').mode()[0]
+
     summary_stats = {
         "total_surgeries": len(surgery_df),
         "unique_patients": surgery_df['tp_mrno_corrected'].nunique() if 'tp_mrno_corrected' in surgery_df.columns else 0,
         "failed_cases": len(EXCEL_SHEETS["4_Failed Cases"]),
         "infection_cases": len(EXCEL_SHEETS["4_Infection Cases"]),
         "repeat_surgeries": len(repeat_df),
-        "sheets_count": len(EXCEL_SHEETS)
+        "sheets_count": len(EXCEL_SHEETS),
+        "surg_month_tag": surg_month_tag
     }
 
     return output_buffer, EXCEL_SHEETS, summary_stats
@@ -2557,14 +2564,33 @@ if app_mode == "Single-Month Deep Analysis":
         *Header row auto-detection will locate column headers automatically even if title rows exist at the top.*
         """)
     else:
-        with st.spinner("Reading uploaded file and running analysis pipeline..."):
-            try:
-                df_raw = read_uploaded_file(uploaded_file)
-                excel_bytes, excel_sheets, stats = run_analysis_pipeline(df_raw)
-                st.success(f"✓ Analysis complete! Processed **{stats['total_surgeries']:,}** surgeries across **{stats['sheets_count']}** result tabs.")
-            except Exception as e:
-                st.error(f"❌ Error processing file: {e}")
-                st.stop()
+        file_key = f"{uploaded_file.name}_{uploaded_file.size}"
+        if "single_cache_key" not in st.session_state or st.session_state.get("single_cache_key") != file_key:
+            with st.spinner("Reading uploaded file and running analysis pipeline..."):
+                try:
+                    df_raw = read_uploaded_file(uploaded_file)
+                    excel_buf, excel_sheets, stats = run_analysis_pipeline(df_raw)
+
+                    surg_suffix = stats.get("surg_month_tag")
+                    if not surg_suffix:
+                        m_lbl = extract_month_label(getattr(uploaded_file, "name", ""))
+                        surg_suffix = re.sub(r'[^A-Za-z0-9]', '', m_lbl) or datetime.now().strftime('%b%Y')
+
+                    st.session_state["single_cache_key"] = file_key
+                    st.session_state["single_excel_bytes"] = excel_buf.getvalue()
+                    st.session_state["single_excel_sheets"] = excel_sheets
+                    st.session_state["single_stats"] = stats
+                    st.session_state["single_surg_suffix"] = surg_suffix
+                    st.success(f"✓ Analysis complete! Processed **{stats['total_surgeries']:,}** surgeries across **{stats['sheets_count']}** result tabs.")
+                except Exception as e:
+                    st.error(f"❌ Error processing file: {e}")
+                    st.stop()
+        else:
+            excel_sheets = st.session_state["single_excel_sheets"]
+            stats = st.session_state["single_stats"]
+            surg_suffix = st.session_state["single_surg_suffix"]
+
+        excel_bytes = st.session_state["single_excel_bytes"]
 
         # Metrics Display
         st.markdown("### Key Statistics Overview")
@@ -2579,7 +2605,7 @@ if app_mode == "Single-Month Deep Analysis":
 
         # Download Section
         st.markdown("### 📥 Download Resultant Analysis Workbook")
-        out_filename = f"Morbidity_Analysis_Results_{datetime.now().strftime('%b%Y')}.xlsx"
+        out_filename = f"Morbidity_Analysis_Results_{surg_suffix}.xlsx"
         st.download_button(
             label=f"⬇️ Download Executive Report ({out_filename})",
             data=excel_bytes,
@@ -2780,22 +2806,52 @@ else:
             lbl_3 = st.text_input("Month 3 Label", value=m_labels[2], key="lbl_3")
 
         active_labels = [lbl_1, lbl_2, lbl_3]
+        trend_cache_key = tuple((getattr(f, "name", str(f)), getattr(f, "size", 0)) for f in uploaded_files) + tuple(active_labels)
 
-        with st.spinner("Processing 3-month cohort datasets and generating trend analysis..."):
-            try:
-                month_results = {}
-                for lbl, fl in zip(active_labels, uploaded_files):
-                    df_cleaned = load_and_clean_month_df(fl)
-                    res = process_single_month(df_cleaned)
-                    month_results[lbl] = res
+        if "trend_cache_key" not in st.session_state or st.session_state.get("trend_cache_key") != trend_cache_key:
+            with st.spinner("Processing 3-month cohort datasets and generating trend analysis..."):
+                try:
+                    month_results = {}
+                    for lbl, fl in zip(active_labels, uploaded_files):
+                        df_cleaned = load_and_clean_month_df(fl)
+                        res = process_single_month(df_cleaned)
+                        month_results[lbl] = res
 
-                trend_tables = build_3month_trend_tables(month_results)
-                trend_excel_bytes = create_trend_excel(trend_tables)
-                trend_pptx_bytes = create_trend_pptx(trend_tables, active_labels)
-                st.success("✓ 3-Month Trend Analysis complete! All trend tables, charts, and reports generated.")
-            except Exception as e:
-                st.error(f"❌ Error processing trend data: {e}")
-                st.stop()
+                    trend_tables = build_3month_trend_tables(month_results)
+                    trend_excel_buf = create_trend_excel(trend_tables)
+                    trend_pptx_buf = create_trend_pptx(trend_tables, active_labels)
+
+                    # Determine surgery month tags for all 3 months
+                    surg_tags = []
+                    for lbl in active_labels:
+                        m_surg_df = month_results[lbl].get("surgery_df", pd.DataFrame())
+                        tag = None
+                        if "surg_date" in m_surg_df.columns:
+                            valid_s = pd.to_datetime(m_surg_df["surg_date"], errors="coerce").dropna()
+                            if not valid_s.empty:
+                                tag = valid_s.dt.strftime("%b%Y").mode()[0]
+                        if not tag:
+                            tag = re.sub(r'[^A-Za-z0-9]', '', str(lbl))
+                        surg_tags.append(tag)
+                    suffix_3m = "_".join(surg_tags)
+
+                    st.session_state["trend_cache_key"] = trend_cache_key
+                    st.session_state["trend_month_results"] = month_results
+                    st.session_state["trend_tables"] = trend_tables
+                    st.session_state["trend_excel_bytes"] = trend_excel_buf.getvalue()
+                    st.session_state["trend_pptx_bytes"] = trend_pptx_buf.getvalue()
+                    st.session_state["trend_suffix_3m"] = suffix_3m
+                    st.success("✓ 3-Month Trend Analysis complete! All trend tables, charts, and reports generated.")
+                except Exception as e:
+                    st.error(f"❌ Error processing trend data: {e}")
+                    st.stop()
+        else:
+            month_results = st.session_state["trend_month_results"]
+            trend_tables = st.session_state["trend_tables"]
+            suffix_3m = st.session_state["trend_suffix_3m"]
+
+        trend_excel_bytes = st.session_state["trend_excel_bytes"]
+        trend_pptx_bytes = st.session_state["trend_pptx_bytes"]
 
         # Key Metrics Overview
         tot_surgeries = sum(len(res["surgery_df"]) for res in month_results.values())
@@ -2823,20 +2879,22 @@ else:
 
         # Download Section
         st.markdown("### 📥 Download Trend Deliverables")
+        trend_excel_filename = f"3_Month_Trends_Results_{suffix_3m}.xlsx"
+        trend_pptx_filename = f"3_Month_Trends_Report_{suffix_3m}.pptx"
         d_col1, d_col2 = st.columns(2)
         with d_col1:
             st.download_button(
-                label="⬇️ Download Executive Trend Excel (6 Sheets)",
+                label=f"⬇️ Download Executive Trend Excel ({trend_excel_filename})",
                 data=trend_excel_bytes,
-                file_name=f"3_Month_Trends_Results_{datetime.now().strftime('%b%Y')}.xlsx",
+                file_name=trend_excel_filename,
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 help="Excel workbook containing side-by-side trend tables for Adherence and Resurgeries."
             )
         with d_col2:
             st.download_button(
-                label="📊 Download Executive Trend PowerPoint (PPTX)",
+                label=f"📊 Download Executive Trend PowerPoint ({trend_pptx_filename})",
                 data=trend_pptx_bytes,
-                file_name=f"3_Month_Trends_Report_{datetime.now().strftime('%b%Y')}.pptx",
+                file_name=trend_pptx_filename,
                 mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
                 help="Executive 16:9 widescreen PowerPoint presentation containing trend charts and clinical breakdowns."
             )
